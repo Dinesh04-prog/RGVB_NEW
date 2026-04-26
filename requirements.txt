@@ -1,5 +1,0 @@
-flask
-supabase
-pandas
-openpyxl
-google-genai
