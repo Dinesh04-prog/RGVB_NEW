@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from "react";
+import { useAuth } from "./contexts/AuthContext";
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
 import Fuse from "fuse.js";
 import localforage from 'localforage';
 import html2canvas from 'html2canvas';
 import { saveSale, getSalesHistory } from "./lib/db";
 import type { CartItem, Receipt } from "./lib/db";
-import { translateHinglishToMarathi } from "./lib/phonetic";
+import { translateHinglishToMarathi, normalizeForSearch, HINGLISH_TO_MARATHI, parseUserQuery, scoreCandidate } from "./lib/phonetic";
 
 interface InventoryItem {
   id: string;
@@ -45,6 +46,7 @@ const getUnitMultiplier = (targetUnit: string, baseUnit: string) => {
 };
 
 export default function App() {
+  const { user, logout } = useAuth();
   const [activeTab, setActiveTab] = useState("billing");
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [fuse, setFuse] = useState<Fuse<InventoryItem> | null>(null);
@@ -61,6 +63,10 @@ export default function App() {
   // Inventory state
   const [stockQuery, setStockQuery] = useState("");
   const [imeEnabled, setImeEnabled] = useState(true);
+  const [stockPage, setStockPage] = useState(1);
+  const ITEMS_PER_PAGE = 10;
+  const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
+  const [brandIndex, setBrandIndex] = useState<Set<string>>(new Set());
 
   // Reports state
   const [totalProfit, setTotalProfit] = useState(0);
@@ -72,6 +78,7 @@ export default function App() {
   const [lastReceipt, setLastReceipt] = useState<Receipt | null>(null);
   const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
   const [receiptShareOpen, setReceiptShareOpen] = useState(false);
+  const [viewingReceipt, setViewingReceipt] = useState<Receipt | null>(null);
   const receiptCardRef = useRef<HTMLDivElement>(null);
 
   const formatName = (name: string) => {
@@ -110,15 +117,18 @@ export default function App() {
           setInventory(loadedItems);
           setFuse(new Fuse(loadedItems, {
             keys: [
-              { name: "search_key", weight: 3 },
-              { name: "name", weight: 1 },
-              { name: "name_marathi", weight: 1 },
-              { name: "name_eng", weight: 1 },
-              { name: "brand", weight: 1 },
-              { name: "id", weight: 0.5 },
-              { name: "barcode", weight: 0.5 },
+              { name: "search_key",   weight: 3   },
+              { name: "name_marathi", weight: 1.5 },
+              { name: "name",         weight: 1   },
+              { name: "name_eng",     weight: 1   },
+              { name: "brand",        weight: 1   },
+              { name: "id",           weight: 0.5 },
+              { name: "barcode",      weight: 0.5 },
             ],
-            threshold: 0.3,
+            threshold: 0.45,
+            ignoreLocation: true,
+            distance: 300,
+            minMatchCharLength: 2,
             shouldSort: true,
             includeScore: true
           }));
@@ -132,9 +142,24 @@ export default function App() {
     loadInventory();
   }, []);
 
+  useEffect(() => {
+    localforage.getItem('favorite_ids').then((ids) => {
+      if (ids && Array.isArray(ids)) setFavoriteIds(new Set(ids as string[]));
+    });
+  }, []);
+
+  // Rebuild brand index whenever inventory changes
+  useEffect(() => {
+    if (inventory.length > 0) {
+      setBrandIndex(new Set(
+        inventory.map(i => (i.brand || '').toLowerCase().trim()).filter(Boolean)
+      ));
+    }
+  }, [inventory]);
+
   // Update reports on tab change
   useEffect(() => {
-    if (activeTab === "reports" || activeTab === "customers") {
+    if (activeTab === "reports" || activeTab === "customers" || activeTab === "receipts") {
       getSalesHistory().then((sales: Receipt[]) => {
         setAllSales(sales);
         const total = sales.reduce((acc: number, sale: Receipt) => acc + sale.total, 0);
@@ -145,80 +170,166 @@ export default function App() {
 
   useEffect(() => {
     setSelectedSuggestionIndex(-1);
-    if (!query || !fuse) {
-      setSuggestions([]);
-      return;
-    }
+    if (!query || !fuse) { setSuggestions([]); return; }
 
     const q = query.trim().toLowerCase();
-    
-    // 1. Prioritize Search Key: Look for items where search_key matches the query
-    // Using String() to handle cases where Excel might treat codes as numbers
-    const searchKeyMatches = inventory.filter(item => {
-      const key = String(item.search_key || "").trim().toLowerCase();
+
+    // ── Step 1: Fast path — exact/prefix search_key ────────────────────────
+    const skMatches = inventory.filter(item => {
+      const key = String(item.search_key || '').trim().toLowerCase();
       return key && (key === q || key.startsWith(q));
     });
-
-    if (searchKeyMatches.length > 0) {
-      // Sort by length (shorter keys first) to get exact matches at the top
-      const sorted = [...searchKeyMatches].sort((a, b) => 
-        String(a.search_key || "").length - String(b.search_key || "").length
+    if (skMatches.length > 0) {
+      setSuggestions(
+        [...skMatches]
+          .sort((a, b) => String(a.search_key||'').length - String(b.search_key||'').length)
+          .slice(0, 15)
       );
-      setSuggestions(sorted.slice(0, 15));
       return;
     }
 
-    // 2. Compound brand + name search
-    // Split query into words and check if any word is a brand prefix/exact match.
-    // If found, run a focused fuse search within only that brand's items.
+    // ── Step 2: Structured intent parsing ─────────────────────────────────
+    // Extracts brand, unit, and price signals from the query in both
+    // English and Marathi, leaving the clean product name for fuzzy search.
+    const parsed = parseUserQuery(query, brandIndex);
+    // Store unit signals so selectItemForModal can pre-fill qty/unit in the cart modal
+    lastParsedRef.current = (parsed.unitQty && parsed.unitType)
+      ? { qty: parsed.unitQty, cartUnit: parsed.unitType }
+      : null;
+    const hasSignals = !!(parsed.brandHint || parsed.unitHint || parsed.priceHint);
+
+    if (hasSignals) {
+      // Build the name query variants (clean product name after signal extraction)
+      const nameQ = parsed.cleanQuery || '';
+      const buildVariants = (text: string): Set<string> => {
+        const v = new Set<string>();
+        if (!text) return v;
+        v.add(text);
+        const mr = translateHinglishToMarathi(text);
+        if (mr && mr !== text) v.add(mr);
+        const nr = normalizeForSearch(text);
+        if (nr && nr !== text) v.add(nr);
+        for (const word of text.split(/\s+/).filter(w => w.length >= 2)) {
+          const d = HINGLISH_TO_MARATHI[word.toLowerCase()];
+          if (d) { v.add(d); v.add(text.replace(word, d)); }
+        }
+        return v;
+      };
+
+      // Determine candidate pool: brand-filtered or full inventory
+      let pool: InventoryItem[] = [];
+
+      if (parsed.brandHint) {
+        pool = inventory.filter(item => {
+          const ib = (item.brand || '').toLowerCase();
+          return ib === parsed.brandHint ||
+                 ib.startsWith(parsed.brandHint!) ||
+                 parsed.brandHint!.startsWith(ib);
+        });
+        // Fuzzy name search within brand pool
+        if (nameQ && pool.length > 0) {
+          const bFuse = new Fuse(pool, {
+            keys: [{ name: 'search_key', weight: 3 }, { name: 'name_marathi', weight: 2 },
+                   { name: 'name', weight: 2 }, { name: 'name_eng', weight: 1.5 }],
+            threshold: 0.5, ignoreLocation: true, shouldSort: true, includeScore: true,
+          });
+          const bSeen = new Set<string>();
+          const bResults: InventoryItem[] = [];
+          for (const v of buildVariants(nameQ)) {
+            for (const r of bFuse.search(v, { limit: 20 })) {
+              if (!bSeen.has(r.item.id)) { bSeen.add(r.item.id); bResults.push(r.item); }
+            }
+          }
+          pool = bResults.length > 0 ? bResults : pool;
+        }
+      } else if (nameQ) {
+        // No brand detected — search full inventory by name
+        const seen = new Set<string>();
+        for (const v of buildVariants(nameQ)) {
+          for (const r of fuse.search(v, { limit: 25 })) {
+            if (!seen.has(r.item.id)) { seen.add(r.item.id); pool.push(r.item); }
+          }
+        }
+      } else {
+        // Only price/unit signals, no name — score all inventory items
+        pool = inventory;
+      }
+
+      // Score each candidate by how well it satisfies the extracted signals.
+      // Items matching all signals rank first; name-only matches appear below.
+      const scored = pool
+        .map(item => ({ item, bonus: scoreCandidate(item, parsed) }))
+        .sort((a, b) => b.bonus - a.bonus);
+
+      const results = scored.map(s => s.item).slice(0, 15);
+      if (results.length > 0) { setSuggestions(results); return; }
+      // Fall through to fuzzy pipeline if structured search found nothing
+    }
+
+    // ── Step 3: Multi-variant fuzzy pipeline (plain name queries) ──────────
     const words = q.split(/\s+/).filter(w => w.length >= 2);
-    if (words.length >= 1) {
+    // Plain brand-scoped check (for queries without price/unit signals)
+    if (!hasSignals) {
       for (const word of words) {
-        const brandItems = inventory.filter(item => {
-          const b = (item.brand || "").toLowerCase();
+        const bItems = inventory.filter(item => {
+          const b = (item.brand || '').toLowerCase();
           return b && (b === word || b.startsWith(word) || (word.length >= 4 && b.includes(word)));
         });
-        // Only treat as brand if it meaningfully narrows the list (< 25 % of inventory)
-        if (brandItems.length > 0 && brandItems.length < inventory.length * 0.25) {
-          const nameQ = words.filter(w => w !== word).join(" ").trim();
-          if (nameQ) {
-            // Brand detected + item name present: fuse-search within brand items
-            const brandFuse = new Fuse(brandItems, {
-              keys: [
-                { name: "search_key", weight: 3 },
-                { name: "name", weight: 2 },
-                { name: "name_marathi", weight: 2 },
-                { name: "name_eng", weight: 2 },
-              ],
-              threshold: 0.4,
-              shouldSort: true,
-              includeScore: true,
+        if (bItems.length > 0 && bItems.length < inventory.length * 0.25) {
+          const nameQ2 = words.filter(w => w !== word).join(' ').trim();
+          if (nameQ2) {
+            const bFuse2 = new Fuse(bItems, {
+              keys: [{ name: 'search_key', weight: 3 }, { name: 'name', weight: 2 },
+                     { name: 'name_marathi', weight: 2 }, { name: 'name_eng', weight: 2 }],
+              threshold: 0.45, ignoreLocation: true, shouldSort: true, includeScore: true,
             });
-            const brandResults = brandFuse.search(nameQ, { limit: 15 });
-            if (brandResults.length > 0) {
-              setSuggestions(brandResults.map(r => r.item));
-              return;
-            }
+            const br = bFuse2.search(nameQ2, { limit: 15 });
+            if (br.length > 0) { setSuggestions(br.map(r => r.item)); return; }
           } else {
-            // Brand only — return all items for that brand
-            setSuggestions(brandItems.slice(0, 15));
-            return;
+            setSuggestions(bItems.slice(0, 15)); return;
           }
         }
       }
     }
 
-    // 3. Fallback: Normal fuzzy/marathi search (existing algorithm, unchanged)
-    const marathiQuery = translateHinglishToMarathi(query);
-    const fuzzyQuery = (marathiQuery && marathiQuery !== query) ? `${query} | ${marathiQuery}` : query;
-    const results = fuse.search(fuzzyQuery, { limit: 15 });
-    setSuggestions(results.map(r => r.item));
-  }, [query, fuse, inventory]);
+    // Multi-variant Fuse search (typo tolerance + Marathi translation + normalization)
+    const marathiQ = translateHinglishToMarathi(query);
+    const normQ    = normalizeForSearch(q);
+    const variants = new Set<string>([query]);
+    if (marathiQ && marathiQ !== query) variants.add(marathiQ);
+    if (normQ    && normQ    !== q    ) variants.add(normQ);
+    for (const w of words) {
+      const d = HINGLISH_TO_MARATHI[w];
+      if (d) { variants.add(d); variants.add(q.replace(w, d)); }
+      const nw = normalizeForSearch(w); if (nw && nw !== w) variants.add(nw);
+      const mw = translateHinglishToMarathi(w); if (mw && mw !== w) variants.add(mw);
+    }
+    const seen2  = new Set<string>();
+    const merged: InventoryItem[] = [];
+    for (const v of variants) {
+      for (const r of fuse.search(v, { limit: 15 })) {
+        if (!seen2.has(r.item.id)) { seen2.add(r.item.id); merged.push(r.item); }
+      }
+      if (merged.length >= 15) break;
+    }
+    // Token-level fallback for sparse multi-word results
+    if (merged.length < 3 && words.length > 1) {
+      for (const token of words) {
+        for (const tv of [token, translateHinglishToMarathi(token), HINGLISH_TO_MARATHI[token]].filter(Boolean) as string[]) {
+          for (const r of fuse.search(tv, { limit: 8 })) {
+            if (!seen2.has(r.item.id)) { seen2.add(r.item.id); merged.push(r.item); }
+          }
+        }
+      }
+    }
+    setSuggestions(merged.slice(0, 15));
+  }, [query, fuse, inventory, brandIndex]);
 
 
   // Modals simulation state
   const [modalItem, setModalItem] = useState<{ item: InventoryItem | CartItem, qty: number, rate: number, isEdit: boolean, index: number | null, cartUnit: string, multiplier: number } | null>(null);
   const [voiceContext, setVoiceContext] = useState<{ qty: number, cartUnit: string } | null>(null);
+  const lastParsedRef = useRef<{ qty: number; cartUnit: string } | null>(null);
   const [inventoryEditItem, setInventoryEditItem] = useState<InventoryItem | null>(null);
   const [isScanning, setIsScanning] = useState(false);
   const scannerRef = useRef<any>(null);
@@ -291,8 +402,36 @@ export default function App() {
     }
     setInventory(newInv);
     await localforage.setItem('custom_inventory', newInv);
-    setFuse(new Fuse(newInv, { keys: ["name", "name_marathi", "name_eng", "id", "barcode"], threshold: 0.3, shouldSort: true, includeScore: true }));
+    setFuse(new Fuse(newInv, { keys: [{ name: "search_key", weight: 3 }, { name: "name_marathi", weight: 1.5 }, { name: "name", weight: 1 }, { name: "name_eng", weight: 1 }, { name: "brand", weight: 1 }], threshold: 0.45, ignoreLocation: true, distance: 300, minMatchCharLength: 2, shouldSort: true, includeScore: true }));
     setInventoryEditItem(null);
+  };
+
+  const toggleFavorite = (id: string) => {
+    setFavoriteIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      localforage.setItem('favorite_ids', Array.from(next));
+      return next;
+    });
+  };
+
+  const deleteInventoryItem = async () => {
+    if (!inventoryEditItem) return;
+    const itemName = inventoryEditItem.name_marathi || inventoryEditItem.name || "this item";
+    if (!confirm(`Delete "${itemName}" from inventory? This cannot be undone.`)) return;
+    const newInv = inventory.filter(i => i.id !== inventoryEditItem.id);
+    setInventory(newInv);
+    await localforage.setItem('custom_inventory', newInv);
+    setFuse(new Fuse(newInv, { keys: [{ name: "search_key", weight: 3 }, { name: "name_marathi", weight: 1.5 }, { name: "name", weight: 1 }, { name: "name_eng", weight: 1 }, { name: "brand", weight: 1 }], threshold: 0.45, ignoreLocation: true, distance: 300, minMatchCharLength: 2, shouldSort: true, includeScore: true }));
+    setInventoryEditItem(null);
+  };
+
+  const loadReceiptToCart = (receipt: Receipt) => {
+    setCart(receipt.items.map(item => ({ ...item })));
+    setCustomerName(receipt.customerName || "");
+    setCustomerPhone(receipt.customerPhone || "");
+    setViewingReceipt(null);
+    setActiveTab('billing');
   };
 
   const exportInventoryToExcel = async () => {
@@ -333,6 +472,12 @@ export default function App() {
         finalCartUnit = baseUnit;
       }
       setVoiceContext(null);
+    } else if (lastParsedRef.current) {
+      finalQty = lastParsedRef.current.qty;
+      const baseUnit = (item.unit || "unit").toLowerCase();
+      finalCartUnit = lastParsedRef.current.cartUnit;
+      finalMult = getUnitMultiplier(lastParsedRef.current.cartUnit, baseUnit);
+      lastParsedRef.current = null;
     }
 
     setModalItem({
@@ -614,17 +759,41 @@ export default function App() {
 
   const cartTotal = cart.reduce((sum, item) => sum + item.total, 0);
 
-  // Stock filtering
-  const filteredStock = inventory.filter(i => {
-    if (!stockQuery) return true;
-    const mq = translateHinglishToMarathi(stockQuery);
-    const sq = stockQuery.toLowerCase();
-    return (i.search_key || "").toLowerCase().includes(sq) ||
-      (i.name || "").toLowerCase().includes(sq) ||
+  // Stock filtering — substring first, Fuse fuzzy fallback on miss
+  const filteredStock = (() => {
+    if (!stockQuery) return inventory;
+    const sq  = stockQuery.toLowerCase();
+    const mq  = translateHinglishToMarathi(stockQuery);
+    const nq  = normalizeForSearch(sq);
+    const exact = inventory.filter(i =>
+      (i.search_key   || "").toLowerCase().includes(sq) ||
+      (i.name         || "").toLowerCase().includes(sq) ||
       (i.name_marathi || "").toLowerCase().includes(sq) ||
-      (i.name_eng || "").toLowerCase().includes(sq) ||
-      (mq && (i.name_marathi || "").toLowerCase().includes(mq));
-  });
+      (i.name_eng     || "").toLowerCase().includes(sq) ||
+      (mq  && mq  !== sq && (i.name_marathi || "").toLowerCase().includes(mq)) ||
+      (nq  && nq  !== sq && (i.name_eng     || "").toLowerCase().includes(nq))
+    );
+    if (exact.length > 0) return exact;
+    // Nothing found via substring — fall back to Fuse for typo tolerance
+    if (!fuse) return [];
+    const stockVariants = new Set<string>([stockQuery]);
+    if (mq && mq !== stockQuery) stockVariants.add(mq);
+    if (nq && nq !== sq)         stockVariants.add(nq);
+    const dictHit = HINGLISH_TO_MARATHI[sq];
+    if (dictHit) stockVariants.add(dictHit);
+    const seen = new Set<string>();
+    const results: InventoryItem[] = [];
+    for (const v of stockVariants) {
+      for (const r of fuse.search(v, { limit: 20 })) {
+        if (!seen.has(r.item.id)) { seen.add(r.item.id); results.push(r.item); }
+      }
+    }
+    return results;
+  })();
+  const favFilteredStock = filteredStock.filter(s => favoriteIds.has(s.id));
+  const nonFavFilteredStock = filteredStock.filter(s => !favoriteIds.has(s.id));
+  const totalStockPages = Math.max(1, Math.ceil(nonFavFilteredStock.length / ITEMS_PER_PAGE));
+  const pagedStock = nonFavFilteredStock.slice((stockPage - 1) * ITEMS_PER_PAGE, stockPage * ITEMS_PER_PAGE);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -663,7 +832,7 @@ export default function App() {
 
         await localforage.setItem('custom_inventory', dedupedData);
         setInventory(dedupedData);
-        setFuse(new Fuse(dedupedData, { keys: [{ name: "search_key", weight: 3 }, { name: "name", weight: 1 }, { name: "name_marathi", weight: 1 }, { name: "name_eng", weight: 1 }, { name: "id", weight: 0.5 }, { name: "barcode", weight: 0.5 }], threshold: 0.3, shouldSort: true, includeScore: true }));
+        setFuse(new Fuse(dedupedData, { keys: [{ name: "search_key", weight: 3 }, { name: "name_marathi", weight: 1.5 }, { name: "name", weight: 1 }, { name: "name_eng", weight: 1 }, { name: "brand", weight: 1 }, { name: "id", weight: 0.5 }, { name: "barcode", weight: 0.5 }], threshold: 0.45, ignoreLocation: true, distance: 300, minMatchCharLength: 2, shouldSort: true, includeScore: true }));
         alert(`Successfully loaded ${dedupedData.length} unique items (deduplicated from ${mappedItems.length}) to offline storage!`);
       };
       reader.readAsBinaryString(file);
@@ -671,6 +840,45 @@ export default function App() {
       console.error(err);
       alert("Error parsing Excel file.");
     }
+  };
+
+  const renderInventoryCard = (s: InventoryItem) => {
+    const mrp = s.purchase_price || 0;
+    const price = s.price || 0;
+    const stock = s.stock_quantity ?? s.stock_qty ?? 0;
+    const hasDiscount = price > 0 && mrp > 0 && price < mrp;
+    const isLowStock = stock < 10;
+    const marathiName = s.name_marathi || s.name;
+    const engName = formatName(s.name_eng || "");
+    const isFav = favoriteIds.has(s.id);
+    return (
+      <div key={s.id} className="kirana-card" onClick={() => setInventoryEditItem(s)}>
+        <div
+          onClick={(e) => { e.stopPropagation(); toggleFavorite(s.id); }}
+          style={{ fontSize: '1.3rem', cursor: 'pointer', color: isFav ? '#F59E0B' : '#D1D5DB', alignSelf: 'flex-start', lineHeight: 1, flexShrink: 0, userSelect: 'none' }}
+        >
+          {isFav ? '★' : '☆'}
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 'bold', fontSize: '1.12rem', fontFamily: '"Noto Sans Devanagari", sans-serif', lineHeight: 1.3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: '#1C1917' }}>{marathiName}</div>
+          {engName && <div style={{ fontSize: '0.82rem', color: '#57534E', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{engName}</div>}
+          {s.brand && <div style={{ color: '#0a3d62', fontWeight: 'bold', fontSize: '0.88rem' }}>{s.brand}</div>}
+          <div style={{ color: '#9ca3af', fontSize: '0.68rem', marginTop: '1px' }}>({s.unit}) · {s.id}</div>
+        </div>
+        <div className="kirana-vals">
+          <div style={{ fontWeight: 'bold', color: '#DC2626', fontSize: '0.88rem', textDecoration: hasDiscount ? 'line-through' : 'none' }}>
+            {mrp ? `₹${mrp}` : '—'}
+          </div>
+          <div style={{ fontWeight: 'bold', color: '#16A34A', fontSize: '0.9rem' }}>
+            ₹{price}
+          </div>
+          <div style={{ fontWeight: 'bold', color: isLowStock ? '#DC2626' : '#9CA3AF', fontSize: '0.88rem' }}>
+            {stock}
+            {isLowStock && <div style={{ fontSize: '0.6rem', color: '#DC2626' }}>⚠ कमी</div>}
+          </div>
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -756,13 +964,11 @@ export default function App() {
             .modal-overlay { padding: 10px; }
         }
 
-        .kirana-card { background: white; border-radius: 12px; border: 1px solid #E7E5E4; box-shadow: 0 2px 8px rgba(0,0,0,0.04); overflow: hidden; margin-bottom: 10px; }
-        .kirana-card-top { padding: 12px 14px 8px; }
-        .kirana-card-bottom { background: #FFFBF5; border-top: 1px solid #E7E5E4; display: grid; grid-template-columns: 1fr 1fr 1fr; }
-        .kirana-price-cell { padding: 8px 10px; text-align: center; border-right: 1px solid #E7E5E4; }
-        .kirana-price-cell:last-child { border-right: none; }
-        .kirana-cell-label { font-size: 0.65rem; color: #78716C; font-weight: bold; margin-bottom: 2px; font-family: "Noto Sans Devanagari", sans-serif; }
-        .kirana-discount-badge { background: #16A34A; color: white; font-size: 0.68rem; font-weight: bold; padding: 2px 8px; border-radius: 999px; font-family: "Noto Sans Devanagari", sans-serif; }
+        .kirana-card { background: white; border-radius: 12px; border: 1px solid #E7E5E4; box-shadow: 0 2px 8px rgba(0,0,0,0.04); margin-bottom: 8px; display: flex; align-items: center; padding: 10px 14px; gap: 10px; cursor: pointer; }
+        .kirana-card:hover { background: #fafafa; }
+        .kirana-col-header { display: grid; grid-template-columns: 75px 75px 75px; text-align: center; flex-shrink: 0; }
+        .kirana-vals { display: grid; grid-template-columns: 75px 75px 75px; text-align: center; flex-shrink: 0; }
+        .kirana-discount-badge { background: #16A34A; color: white; font-size: 0.6rem; font-weight: bold; padding: 1px 5px; border-radius: 999px; }
         .kirana-empty { text-align: center; margin-top: 3rem; font-family: "Noto Sans Devanagari", sans-serif; color: #78716C; }
 
         #printReceiptArea { display: none; }
@@ -788,14 +994,32 @@ export default function App() {
       `}} />
 
       {/* Sidebar */}
-      <div className="sidebar">
+      <div className="sidebar" style={{ position: 'fixed', display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: '1.5rem', textAlign: 'center' }}><h3 style={{ fontWeight: 'bold', margin: 0 }}>Rajendra GVB</h3></div>
-        <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', flex: 1 }}>
           <a className={`nav-link ${activeTab === 'billing' ? 'active' : ''}`} onClick={() => setActiveTab('billing')}>📝 BILLING</a>
           <a className={`nav-link ${activeTab === 'inventory' ? 'active' : ''}`} onClick={() => setActiveTab('inventory')} style={{ opacity: activeTab === 'inventory' ? 1 : 0.75 }}>📦 INVENTORY</a>
           <a className={`nav-link ${activeTab === 'reports' ? 'active' : ''}`} onClick={() => setActiveTab('reports')} style={{ opacity: activeTab === 'reports' ? 1 : 0.75 }}>📊 REPORTS</a>
           <a className={`nav-link ${activeTab === 'customers' ? 'active' : ''}`} onClick={() => setActiveTab('customers')} style={{ opacity: activeTab === 'customers' ? 1 : 0.75 }}>👥 CUSTOMERS</a>
+          <a className={`nav-link ${activeTab === 'receipts' ? 'active' : ''}`} onClick={() => setActiveTab('receipts')} style={{ opacity: activeTab === 'receipts' ? 1 : 0.75 }}>🧾 RECEIPTS</a>
         </div>
+        {user && (
+          <div style={{ padding: '1rem', borderTop: '1px solid rgba(255,255,255,0.15)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+              <img src={user.picture} alt="" style={{ width: 34, height: 34, borderRadius: '50%', flexShrink: 0 }} />
+              <div style={{ overflow: 'hidden' }}>
+                <div style={{ fontSize: '0.85rem', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user.name}</div>
+                <div style={{ fontSize: '0.7rem', opacity: 0.65, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user.email}</div>
+              </div>
+            </div>
+            <button
+              onClick={logout}
+              style={{ width: '100%', background: 'rgba(255,255,255,0.12)', color: 'white', border: '1px solid rgba(255,255,255,0.25)', borderRadius: '8px', padding: '8px', fontSize: '0.85rem', cursor: 'pointer', fontWeight: 600 }}
+            >
+              Sign Out
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Mobile Nav */}
@@ -804,6 +1028,7 @@ export default function App() {
         <div className={`mobile-nav-item ${activeTab === 'inventory' ? 'active' : ''}`} onClick={() => setActiveTab('inventory')}><span>📦</span><br />यादी</div>
         <div className={`mobile-nav-item ${activeTab === 'reports' ? 'active' : ''}`} onClick={() => setActiveTab('reports')}><span>📊</span><br />अहवाल</div>
         <div className={`mobile-nav-item ${activeTab === 'customers' ? 'active' : ''}`} onClick={() => setActiveTab('customers')}><span>👥</span><br />ग्राहक</div>
+        <div className={`mobile-nav-item ${activeTab === 'receipts' ? 'active' : ''}`} onClick={() => setActiveTab('receipts')}><span>🧾</span><br />पावती</div>
       </div>
 
       <div className="main-content">
@@ -970,10 +1195,10 @@ export default function App() {
           <div>
             <h2 style={{ fontWeight: 'bold', marginBottom: '1rem' }}>Inventory</h2>
             <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: '10px' }}>
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: '10px', flexWrap: 'wrap' }}>
                 <div style={{ flex: 1, minWidth: '200px' }}>
-                  <label style={{ fontSize: '0.85rem', fontWeight: 'bold', color: '#6c757d', marginBottom: '8px', display: 'block' }}>
-                    UPLOAD NEW EXCEL INVENTORY
+                  <label style={{ fontSize: '0.85rem', fontWeight: 'bold', color: '#6c757d', marginBottom: '6px', display: 'block' }}>
+                    📤 UPLOAD NEW EXCEL INVENTORY
                   </label>
                   <input
                     type="file"
@@ -982,17 +1207,17 @@ export default function App() {
                     style={{ width: '100%', padding: '8px', background: '#f8f9fa', borderRadius: '5px', border: '1px dashed #ccc' }}
                   />
                 </div>
-                <button 
-                  onClick={() => setInventoryEditItem({ id: `INV-${Date.now()}`, name: '', unit: 'kg', price: 0, purchase_price: 0, stock_quantity: 0, barcode: '' })}
-                  style={{ background: '#0d6efd', color: 'white', border: 'none', padding: '10px 15px', borderRadius: '5px', fontWeight: 'bold', cursor: 'pointer', height: '100%' }}
-                >
-                  ➕ ADD NEW ITEM
-                </button>
-                <button 
+                <button
                   onClick={exportInventoryToExcel}
-                  style={{ background: '#198754', color: 'white', border: 'none', padding: '10px 15px', borderRadius: '5px', fontWeight: 'bold', cursor: 'pointer', height: '100%' }}
+                  style={{ background: '#198754', color: 'white', border: 'none', padding: '10px 16px', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer', whiteSpace: 'nowrap', fontSize: '0.9rem', boxShadow: '0 2px 6px rgba(25,135,84,0.3)' }}
                 >
                   ⬇️ EXPORT EXCEL
+                </button>
+                <button
+                  onClick={() => setInventoryEditItem({ id: `INV-${Date.now()}`, name: '', unit: 'kg', price: 0, purchase_price: 0, stock_quantity: 0, barcode: '' })}
+                  style={{ background: '#0d6efd', color: 'white', border: 'none', padding: '10px 16px', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer', whiteSpace: 'nowrap', fontSize: '0.9rem' }}
+                >
+                  ➕ ADD NEW ITEM
                 </button>
               </div>
               <div style={{ display: 'flex', gap: '10px' }}>
@@ -1003,6 +1228,7 @@ export default function App() {
                   value={stockQuery}
                   onChange={(e) => {
                     const val = e.target.value;
+                    setStockPage(1);
                     if (!imeEnabled) { setStockQuery(val); return; }
                     if (val.endsWith(" ")) {
                       setStockQuery(translateHinglishToMarathi(val.trim()) + " ");
@@ -1019,52 +1245,50 @@ export default function App() {
               </div>
             </div>
             <div>
-              {filteredStock.map(s => {
-                const mrp = s.purchase_price || 0;
-                const price = s.price || 0;
-                const stock = s.stock_quantity ?? s.stock_qty ?? 0;
-                const hasDiscount = price > 0 && mrp > 0 && price < mrp;
-                const discountPct = hasDiscount ? Math.round(((mrp - price) / mrp) * 100) : 0;
-                const isLowStock = stock < 10;
-                const marathiName = s.name_marathi || s.name;
-                const engName = formatName(s.name_eng || "");
-                return (
-                  <div key={s.id} className="kirana-card" onClick={() => setInventoryEditItem(s)} style={{ cursor: 'pointer' }}>
-                    <div className="kirana-card-top">
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px' }}>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontWeight: 'bold', fontSize: '1.05rem', fontFamily: '"Noto Sans Devanagari", sans-serif', lineHeight: 1.3 }}>{marathiName}</div>
-                          {engName && <div style={{ color: '#44403C', fontSize: '0.82rem', marginTop: '2px' }}>{engName}</div>}
-                          {s.brand && <div style={{ color: '#0a3d62', fontWeight: '600', fontSize: '0.82rem', marginTop: '1px' }}>{s.brand}</div>}
-                          {s.unit && <div style={{ color: '#78716C', fontSize: '0.78rem', marginTop: '1px' }}>({s.unit})</div>}
-                        </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px', flexShrink: 0 }}>
-                          <span style={{ color: '#9ca3af', fontSize: '0.68rem' }}>{s.id}</span>
-                          {hasDiscount && <span className="kirana-discount-badge">{discountPct}% सूट</span>}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="kirana-card-bottom">
-                      <div className="kirana-price-cell">
-                        <div className="kirana-cell-label">MRP</div>
-                        {hasDiscount
-                          ? <div style={{ fontWeight: 'bold', color: '#DC2626', textDecoration: 'line-through', fontSize: '0.9rem' }}>₹{mrp}</div>
-                          : <div style={{ fontWeight: 'bold', color: '#1C1917', fontSize: '0.9rem' }}>{mrp ? `₹${mrp}` : '—'}</div>
-                        }
-                      </div>
-                      <div className="kirana-price-cell">
-                        <div className="kirana-cell-label" style={{ fontFamily: '"Noto Sans Devanagari", sans-serif' }}>विक्री किंमत</div>
-                        <div style={{ fontWeight: 'bold', color: '#16A34A', fontSize: '1rem' }}>₹{price}</div>
-                      </div>
-                      <div className="kirana-price-cell">
-                        <div className="kirana-cell-label" style={{ fontFamily: '"Noto Sans Devanagari", sans-serif' }}>साठा</div>
-                        <div style={{ fontWeight: 'bold', color: isLowStock ? '#DC2626' : '#1C1917', fontSize: '0.9rem' }}>{stock}</div>
-                        {isLowStock && <div style={{ color: '#DC2626', fontSize: '0.6rem', fontFamily: '"Noto Sans Devanagari", sans-serif', marginTop: '1px' }}>कमी साठा</div>}
-                      </div>
-                    </div>
+              {/* Column header */}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '2px 14px 6px 0' }}>
+                <div className="kirana-col-header">
+                  <span style={{ color: '#DC2626', fontWeight: 'bold', fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Purchase</span>
+                  <span style={{ color: '#16A34A', fontWeight: 'bold', fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Sale</span>
+                  <span style={{ color: '#9CA3AF', fontWeight: 'bold', fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Stock</span>
+                </div>
+              </div>
+
+              {/* Favourites section */}
+              {favFilteredStock.length > 0 && (
+                <div>
+                  <div style={{ fontSize: '0.72rem', fontWeight: 'bold', color: '#F59E0B', padding: '2px 4px 6px', display: 'flex', alignItems: 'center', gap: '4px', letterSpacing: '0.04em' }}>
+                    ★ FAVOURITES
                   </div>
-                );
-              })}
+                  {favFilteredStock.map(s => renderInventoryCard(s))}
+                  <div style={{ borderBottom: '2px dashed #E7E5E4', margin: '4px 0 12px' }} />
+                </div>
+              )}
+
+              {/* Regular items */}
+              {pagedStock.map(s => renderInventoryCard(s))}
+            </div>
+
+            {/* Pagination Controls */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 4px', marginTop: '4px' }}>
+              <button
+                disabled={stockPage <= 1}
+                onClick={() => setStockPage(p => p - 1)}
+                style={{ background: stockPage <= 1 ? '#e9ecef' : '#0a3d62', color: stockPage <= 1 ? '#adb5bd' : 'white', border: 'none', padding: '10px 20px', borderRadius: '8px', fontWeight: 'bold', cursor: stockPage <= 1 ? 'default' : 'pointer', fontSize: '0.95rem' }}
+              >
+                ← मागे
+              </button>
+              <span style={{ fontWeight: 'bold', color: '#0a3d62', fontSize: '0.9rem', textAlign: 'center' }}>
+                पृष्ठ {stockPage} / {totalStockPages}<br />
+                <span style={{ fontWeight: 'normal', color: '#6c757d', fontSize: '0.78rem' }}>{filteredStock.length} वस्तू</span>
+              </span>
+              <button
+                disabled={stockPage >= totalStockPages}
+                onClick={() => setStockPage(p => p + 1)}
+                style={{ background: stockPage >= totalStockPages ? '#e9ecef' : '#0a3d62', color: stockPage >= totalStockPages ? '#adb5bd' : 'white', border: 'none', padding: '10px 20px', borderRadius: '8px', fontWeight: 'bold', cursor: stockPage >= totalStockPages ? 'default' : 'pointer', fontSize: '0.95rem' }}
+              >
+                पुढे →
+              </button>
             </div>
           </div>
         )}
@@ -1103,6 +1327,105 @@ export default function App() {
                 })}
               </div>
             </div>
+          </div>
+        )}
+
+        {activeTab === 'receipts' && (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', flexWrap: 'wrap', gap: '8px' }}>
+              {viewingReceipt ? (
+                <button onClick={() => setViewingReceipt(null)} style={{ background: 'transparent', border: '1px solid #ccc', borderRadius: '8px', padding: '6px 14px', cursor: 'pointer', fontWeight: 'bold', color: '#0a3d62', fontSize: '0.9rem' }}>
+                  ← Back
+                </button>
+              ) : (
+                <h2 style={{ fontWeight: 'bold', margin: 0 }}>🧾 Receipts</h2>
+              )}
+              {viewingReceipt && (
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <button
+                    onClick={() => { setLastReceipt(viewingReceipt); setViewingReceipt(null); setReceiptShareOpen(true); }}
+                    style={{ background: '#25D366', color: 'white', border: 'none', borderRadius: '8px', padding: '8px 14px', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.85rem' }}
+                  >
+                    📲 Share Again
+                  </button>
+                  <button
+                    onClick={() => loadReceiptToCart(viewingReceipt)}
+                    style={{ background: '#0d6efd', color: 'white', border: 'none', borderRadius: '8px', padding: '8px 14px', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.85rem' }}
+                  >
+                    ✏️ Load to Cart & Edit
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {viewingReceipt ? (
+              /* ── Receipt detail view ── */
+              <div className="card" style={{ padding: '16px' }}>
+                <div style={{ textAlign: 'center', borderBottom: '2px solid #000', paddingBottom: '10px', marginBottom: '10px' }}>
+                  <div style={{ fontWeight: 'bold', fontSize: '1.15rem' }}>RAJENDRA GVB</div>
+                  <div style={{ fontSize: '0.75rem', color: '#555' }}>Fresh Groceries & More</div>
+                  <div style={{ fontWeight: 'bold', marginTop: '6px' }}>BILL: {viewingReceipt.receipt_no}</div>
+                  <div style={{ fontSize: '0.78rem', color: '#666' }}>{viewingReceipt.date}</div>
+                  {(viewingReceipt.customerName || viewingReceipt.customerPhone) && (
+                    <div style={{ marginTop: '4px', fontSize: '0.78rem', borderTop: '1px dashed #ccc', paddingTop: '4px' }}>
+                      {viewingReceipt.customerName && <span>👤 {viewingReceipt.customerName} </span>}
+                      {viewingReceipt.customerPhone && <span>📞 {viewingReceipt.customerPhone}</span>}
+                    </div>
+                  )}
+                </div>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid #ccc', color: '#6c757d' }}>
+                      <th style={{ textAlign: 'left', padding: '6px 4px', fontWeight: '600' }}>Item</th>
+                      <th style={{ textAlign: 'center', padding: '6px 4px', fontWeight: '600' }}>Qty</th>
+                      <th style={{ textAlign: 'right', padding: '6px 4px', fontWeight: '600' }}>Rate</th>
+                      <th style={{ textAlign: 'right', padding: '6px 4px', fontWeight: '600' }}>Amt</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {viewingReceipt.items.map((item, idx) => (
+                      <tr key={idx} style={{ borderBottom: '1px solid #f0f0f0' }}>
+                        <td style={{ padding: '6px 4px', fontWeight: '500' }}>{item.name}</td>
+                        <td style={{ textAlign: 'center', padding: '6px 4px' }}>{item.qty}{item.cartUnit && item.cartUnit !== item.unit ? item.cartUnit : ''}</td>
+                        <td style={{ textAlign: 'right', padding: '6px 4px', color: '#555' }}>₹{(item.rate * (item.multiplier || 1)).toFixed(2)}</td>
+                        <td style={{ textAlign: 'right', padding: '6px 4px', fontWeight: 'bold', color: '#0d6efd' }}>₹{item.total.toFixed(2)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '2px solid #000', marginTop: '10px', paddingTop: '10px', fontWeight: 'bold', fontSize: '1.05rem' }}>
+                  <span>TOTAL</span>
+                  <span style={{ color: '#198754' }}>₹{viewingReceipt.total.toFixed(2)}</span>
+                </div>
+              </div>
+            ) : (
+              /* ── Receipt list ── */
+              <div>
+                {allSales.length === 0 ? (
+                  <div style={{ textAlign: 'center', marginTop: '3rem', color: '#6c757d' }}>No receipts yet. Complete a checkout to see bills here.</div>
+                ) : (
+                  [...allSales].reverse().map(receipt => (
+                    <div
+                      key={receipt.receipt_no}
+                      onClick={() => setViewingReceipt(receipt)}
+                      className="card"
+                      style={{ padding: '12px 16px', marginBottom: '8px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}
+                    >
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 'bold', fontSize: '1rem', color: '#0a3d62' }}>#{receipt.receipt_no}</div>
+                        <div style={{ fontSize: '0.78rem', color: '#6c757d', marginTop: '2px' }}>{receipt.date}</div>
+                        {receipt.customerName && <div style={{ fontSize: '0.8rem', color: '#444', marginTop: '2px' }}>👤 {receipt.customerName}{receipt.customerPhone ? ` · ${receipt.customerPhone}` : ''}</div>}
+                        <div style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '2px' }}>{receipt.items.length} item{receipt.items.length !== 1 ? 's' : ''}</div>
+                      </div>
+                      <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                        <div style={{ fontWeight: 'bold', fontSize: '1.1rem', color: '#198754' }}>₹{receipt.total.toFixed(2)}</div>
+                        <div style={{ fontSize: '0.72rem', color: '#adb5bd', marginTop: '2px' }}>tap to view →</div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -1222,7 +1545,17 @@ export default function App() {
           <div className="modal-content" style={{ padding: '15px' }}>
             <div className="modal-header" style={{ marginBottom: '10px', fontSize: '1.1rem' }}>
               <span>EDIT INVENTORY ITEM</span>
-              <button style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: '1.2rem' }} onClick={() => setInventoryEditItem(null)}>✕</button>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '6px' }}>
+                <button style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: '1.2rem', lineHeight: 1 }} onClick={() => setInventoryEditItem(null)}>✕</button>
+                {inventory.find(i => i.id === inventoryEditItem.id) && (
+                  <button
+                    onClick={deleteInventoryItem}
+                    style={{ border: 'none', background: '#dc3545', color: 'white', cursor: 'pointer', fontSize: '0.7rem', fontWeight: 'bold', borderRadius: '4px', padding: '3px 8px', lineHeight: 1.4 }}
+                  >
+                    DELETE
+                  </button>
+                )}
+              </div>
             </div>
             
             <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#6c757d', marginBottom: '2px', display: 'block' }}>NAME (MARATHI / ENG)</label>
