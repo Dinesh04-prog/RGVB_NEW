@@ -1,5 +1,11 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useAuth } from "./contexts/AuthContext";
+import {
+  createReview, subscribeToReview, isFirebaseReady,
+  saveInventoryItemToCloud, removeInventoryItemFromCloud,
+  subscribeToInventoryOverrides, applyInventoryOverrides,
+} from "./lib/firebase";
+import type { ReviewSession } from "./lib/firebase";
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
 import Fuse from "fuse.js";
 import localforage from 'localforage';
@@ -113,25 +119,48 @@ export default function App() {
         }
 
         if (loadedItems.length > 0) {
-          // Deduplicate items based on parsed cleanly formatted names
-          setInventory(loadedItems);
-          setFuse(new Fuse(loadedItems, {
-            keys: [
-              { name: "search_key",   weight: 3   },
-              { name: "name_marathi", weight: 1.5 },
-              { name: "name",         weight: 1   },
-              { name: "name_eng",     weight: 1   },
-              { name: "brand",        weight: 1   },
-              { name: "id",           weight: 0.5 },
-              { name: "barcode",      weight: 0.5 },
-            ],
-            threshold: 0.45,
-            ignoreLocation: true,
-            distance: 300,
-            minMatchCharLength: 2,
-            shouldSort: true,
-            includeScore: true
-          }));
+          baseInventoryRef.current = loadedItems;
+
+          // Subscribe to Firestore inventory overrides for real-time cross-device sync.
+          // Any edit/add/delete by owner or cashier propagates here instantly.
+          if (invOverridesUnsubRef.current) invOverridesUnsubRef.current();
+          invOverridesUnsubRef.current = subscribeToInventoryOverrides(overrides => {
+            const merged = applyInventoryOverrides(baseInventoryRef.current, overrides);
+            // Also persist merged result to localforage for offline use
+            localforage.setItem('custom_inventory', merged);
+            setInventory(merged);
+            setFuse(new Fuse(merged, {
+              keys: [
+                { name: "search_key",   weight: 3   },
+                { name: "name_marathi", weight: 1.5 },
+                { name: "name",         weight: 1   },
+                { name: "name_eng",     weight: 1   },
+                { name: "brand",        weight: 1   },
+                { name: "id",           weight: 0.5 },
+                { name: "barcode",      weight: 0.5 },
+              ],
+              threshold: 0.45, ignoreLocation: true, distance: 300,
+              minMatchCharLength: 2, shouldSort: true, includeScore: true,
+            }));
+          });
+
+          // If Firebase isn't set up, fall back to the plain base inventory
+          if (!isFirebaseReady) {
+            setInventory(loadedItems);
+            setFuse(new Fuse(loadedItems, {
+              keys: [
+                { name: "search_key",   weight: 3   },
+                { name: "name_marathi", weight: 1.5 },
+                { name: "name",         weight: 1   },
+                { name: "name_eng",     weight: 1   },
+                { name: "brand",        weight: 1   },
+                { name: "id",           weight: 0.5 },
+                { name: "barcode",      weight: 0.5 },
+              ],
+              threshold: 0.45, ignoreLocation: true, distance: 300,
+              minMatchCharLength: 2, shouldSort: true, includeScore: true,
+            }));
+          }
         } else {
           setInventory([]);
         }
@@ -140,6 +169,7 @@ export default function App() {
       }
     };
     loadInventory();
+    return () => { if (invOverridesUnsubRef.current) invOverridesUnsubRef.current(); };
   }, []);
 
   useEffect(() => {
@@ -175,9 +205,12 @@ export default function App() {
     const q = query.trim().toLowerCase();
 
     // ── Step 1: Fast path — exact/prefix search_key ────────────────────────
+    const normQ0 = normalizeForSearch(q);
     const skMatches = inventory.filter(item => {
       const key = String(item.search_key || '').trim().toLowerCase();
-      return key && (key === q || key.startsWith(q));
+      if (!key) return false;
+      return key === q || key.startsWith(q) ||
+             (normQ0 && normQ0 !== q && (key === normQ0 || key.startsWith(normQ0)));
     });
     if (skMatches.length > 0) {
       setSuggestions(
@@ -330,6 +363,15 @@ export default function App() {
   const [modalItem, setModalItem] = useState<{ item: InventoryItem | CartItem, qty: number, rate: number, isEdit: boolean, index: number | null, cartUnit: string, multiplier: number } | null>(null);
   const [voiceContext, setVoiceContext] = useState<{ qty: number, cartUnit: string } | null>(null);
   const lastParsedRef = useRef<{ qty: number; cartUnit: string } | null>(null);
+  const voiceConfidentRef = useRef(false);
+
+  // Owner review state
+  const [reviewStatus, setReviewStatus] = useState<'idle' | 'pending' | 'approved' | 'rejected'>('idle');
+  const [approvedSession, setApprovedSession] = useState<ReviewSession | null>(null);
+  const reviewUnsubRef = useRef<(() => void) | null>(null);
+  const invOverridesUnsubRef = useRef<(() => void) | null>(null);
+  // Holds the latest Firestore overrides so merges always use fresh data
+  const baseInventoryRef = useRef<InventoryItem[]>([]);
   const [inventoryEditItem, setInventoryEditItem] = useState<InventoryItem | null>(null);
   const [isScanning, setIsScanning] = useState(false);
   const scannerRef = useRef<any>(null);
@@ -393,16 +435,19 @@ export default function App() {
 
   const saveInventoryEdit = async () => {
     if (!inventoryEditItem) return;
-    let newInv;
-    const exists = inventory.find(i => i.id === inventoryEditItem.id);
-    if (exists) {
-      newInv = inventory.map(i => i.id === inventoryEditItem.id ? inventoryEditItem : i);
-    } else {
-      newInv = [...inventory, inventoryEditItem];
+    // Push to Firestore first so the real-time listener updates all devices.
+    // The onSnapshot callback will update local state automatically.
+    await saveInventoryItemToCloud(inventoryEditItem);
+    // If Firebase isn't configured, fall back to local-only update
+    if (!isFirebaseReady) {
+      const exists = inventory.find(i => i.id === inventoryEditItem.id);
+      const newInv = exists
+        ? inventory.map(i => i.id === inventoryEditItem.id ? inventoryEditItem : i)
+        : [...inventory, inventoryEditItem];
+      setInventory(newInv);
+      await localforage.setItem('custom_inventory', newInv);
+      setFuse(new Fuse(newInv, { keys: [{ name: "search_key", weight: 3 }, { name: "name_marathi", weight: 1.5 }, { name: "name", weight: 1 }, { name: "name_eng", weight: 1 }, { name: "brand", weight: 1 }], threshold: 0.45, ignoreLocation: true, distance: 300, minMatchCharLength: 2, shouldSort: true, includeScore: true }));
     }
-    setInventory(newInv);
-    await localforage.setItem('custom_inventory', newInv);
-    setFuse(new Fuse(newInv, { keys: [{ name: "search_key", weight: 3 }, { name: "name_marathi", weight: 1.5 }, { name: "name", weight: 1 }, { name: "name_eng", weight: 1 }, { name: "brand", weight: 1 }], threshold: 0.45, ignoreLocation: true, distance: 300, minMatchCharLength: 2, shouldSort: true, includeScore: true }));
     setInventoryEditItem(null);
   };
 
@@ -419,10 +464,14 @@ export default function App() {
     if (!inventoryEditItem) return;
     const itemName = inventoryEditItem.name_marathi || inventoryEditItem.name || "this item";
     if (!confirm(`Delete "${itemName}" from inventory? This cannot be undone.`)) return;
-    const newInv = inventory.filter(i => i.id !== inventoryEditItem.id);
-    setInventory(newInv);
-    await localforage.setItem('custom_inventory', newInv);
-    setFuse(new Fuse(newInv, { keys: [{ name: "search_key", weight: 3 }, { name: "name_marathi", weight: 1.5 }, { name: "name", weight: 1 }, { name: "name_eng", weight: 1 }, { name: "brand", weight: 1 }], threshold: 0.45, ignoreLocation: true, distance: 300, minMatchCharLength: 2, shouldSort: true, includeScore: true }));
+    // Push deletion to Firestore — the real-time listener removes it on all devices.
+    await removeInventoryItemFromCloud(inventoryEditItem.id);
+    if (!isFirebaseReady) {
+      const newInv = inventory.filter(i => i.id !== inventoryEditItem.id);
+      setInventory(newInv);
+      await localforage.setItem('custom_inventory', newInv);
+      setFuse(new Fuse(newInv, { keys: [{ name: "search_key", weight: 3 }, { name: "name_marathi", weight: 1.5 }, { name: "name", weight: 1 }, { name: "name_eng", weight: 1 }, { name: "brand", weight: 1 }], threshold: 0.45, ignoreLocation: true, distance: 300, minMatchCharLength: 2, shouldSort: true, includeScore: true }));
+    }
     setInventoryEditItem(null);
   };
 
@@ -457,19 +506,96 @@ export default function App() {
     }
   };
 
+  const sendToOwner = async () => {
+    if (cart.length === 0) return;
+    if (!isFirebaseReady) { alert('Firebase is not configured. Add your keys to .env first.'); return; }
+    const id = crypto.randomUUID();
+    const session: ReviewSession = {
+      id,
+      cashierName: user?.name ?? 'Cashier',
+      cashierEmail: user?.email ?? '',
+      customerName: customerName || 'Walk-in',
+      customerPhone: customerPhone || '',
+      cart: JSON.parse(JSON.stringify(cart)),
+      status: 'pending',
+      createdAt: Date.now(),
+    };
+    try {
+      await createReview(session);
+      setReviewStatus('pending');
+      // Listen for owner's response
+      if (reviewUnsubRef.current) reviewUnsubRef.current();
+      reviewUnsubRef.current = subscribeToReview(id, (updated) => {
+        if (!updated) return;
+        if (updated.status === 'approved') {
+          setReviewStatus('approved');
+          setApprovedSession(updated);
+          if (reviewUnsubRef.current) { reviewUnsubRef.current(); reviewUnsubRef.current = null; }
+        } else if (updated.status === 'rejected') {
+          setReviewStatus('rejected');
+          setApprovedSession(updated);
+          if (reviewUnsubRef.current) { reviewUnsubRef.current(); reviewUnsubRef.current = null; }
+        }
+      });
+      // Open WhatsApp with review link
+      const appUrl = import.meta.env.VITE_APP_URL || 'http://localhost:5173';
+      const ownerPhone = import.meta.env.VITE_OWNER_PHONE || '';
+      const link = `${appUrl}/?review=${id}`;
+      const total = cart.reduce((s, i) => s + i.total, 0);
+      const msg = `📋 *Bill Review Request*\n\nFrom: ${user?.name ?? 'Cashier'}\nCustomer: ${session.customerName}\nItems: ${cart.length} | Total: ₹${total.toFixed(0)}\n\nPlease review & update rates:\n${link}`;
+      window.open(`https://wa.me/${ownerPhone}?text=${encodeURIComponent(msg)}`, '_blank');
+    } catch (e) {
+      alert('Could not send to owner. Check Firebase connection.');
+      console.error(e);
+    }
+  };
+
+  const applyOwnerRates = () => {
+    if (!approvedSession?.updatedCart) return;
+    setCart(approvedSession.updatedCart);
+    setReviewStatus('idle');
+    setApprovedSession(null);
+  };
+
+  const cancelReview = () => {
+    if (reviewUnsubRef.current) { reviewUnsubRef.current(); reviewUnsubRef.current = null; }
+    setReviewStatus('idle');
+    setApprovedSession(null);
+  };
+
   const selectItemForModal = (item: InventoryItem) => {
     let finalQty = 1;
     let finalCartUnit = item.unit || "unit";
     let finalMult = 1;
 
     if (voiceContext) {
-      finalQty = voiceContext.qty;
-      const baseUnit = (item.unit || "unit").toLowerCase();
+      const rawUnit = item.unit || "unit";
+      const baseUnit = rawUnit.toLowerCase();
+      // Decide whether the voice qty is a purchase quantity or a variant spec.
+      // A packaged item (unit contains a digit like "200g", or is "pcs/pack/bottle")
+      // means the weight was spoken only to identify the SKU → buy 1 piece.
+      // A loose/bulk item (unit is plain "kg", "g", "l", "ml") → buy voiceQty of that unit.
+      const unitHasNumber = /\d/.test(rawUnit);
+      const isPieceUnit = unitHasNumber ||
+        /^(pcs?|pieces?|pack|packet|box|bottle|btl|nos?|tabs?|tablets?)$/i.test(baseUnit.replace(/[\d\s]/g, ''));
+      const isSmallWeightVoice = /^(g|gm|ml)$/.test(voiceContext.cartUnit || '');
+
       if (voiceContext.cartUnit) {
-        finalCartUnit = voiceContext.cartUnit;
-        finalMult = getUnitMultiplier(voiceContext.cartUnit, baseUnit);
+        if (isPieceUnit && isSmallWeightVoice) {
+          // e.g., "colgate 200 gram" — 200g identifies the SKU, cart gets 1 piece
+          finalQty = 1;
+          finalCartUnit = rawUnit;
+          finalMult = 1;
+        } else {
+          // e.g., "sakkhar 5 kilo" — 5kg IS the purchase quantity
+          finalQty = voiceContext.qty;
+          finalCartUnit = voiceContext.cartUnit;
+          finalMult = getUnitMultiplier(voiceContext.cartUnit, baseUnit);
+        }
       } else {
-        finalCartUnit = baseUnit;
+        // No unit spoken — qty from voice, unit from item
+        finalQty = voiceContext.qty;
+        finalCartUnit = rawUnit;
       }
       setVoiceContext(null);
     } else if (lastParsedRef.current) {
@@ -492,6 +618,13 @@ export default function App() {
     setSuggestions([]);
     setQuery("");
   };
+
+  // Auto-open the modal when voice confidence is high and exactly 1 product matches
+  useEffect(() => {
+    if (!voiceConfidentRef.current) return;
+    voiceConfidentRef.current = false;
+    if (suggestions.length === 1) selectItemForModal(suggestions[0]);
+  }, [suggestions]);
 
   const speakText = (text: string) => {
     if (!("speechSynthesis" in window)) return;
@@ -679,7 +812,8 @@ export default function App() {
     const recognition = new SpeechRecognition();
     recognition.lang = imeEnabled ? 'mr-IN' : 'en-IN';
     recognition.continuous = false;
-    recognition.interimResults = false;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 3;
 
     recognition.onstart = () => setIsDictating(true);
     recognition.onend = () => setIsDictating(false);
@@ -693,7 +827,26 @@ export default function App() {
     };
 
     recognition.onresult = (event: any) => {
-      const transcript = event.results[0][0].transcript;
+      const result = event.results[event.results.length - 1];
+
+      // Show live interim text in the search box while still speaking
+      if (!result.isFinal) {
+        setQuery(result[0].transcript.toLowerCase());
+        return;
+      }
+
+      // Pick the best alternative: the one that yields the most Fuse matches
+      let transcript = result[0].transcript;
+      const confidence: number = result[0].confidence ?? 0;
+      if (fuse && result.length > 1) {
+        let bestHits = -1;
+        for (let i = 0; i < result.length; i++) {
+          const alt = result[i].transcript.toLowerCase();
+          const translated = translateHinglishToMarathi(alt) || alt;
+          const hits = fuse.search(translated, { limit: 3 }).length;
+          if (hits > bestHits) { bestHits = hits; transcript = result[i].transcript; }
+        }
+      }
 
       let text = transcript.toLowerCase();
       // Parse numbers (Marathi/Hindi/Hinglish)
@@ -732,26 +885,50 @@ export default function App() {
         }
       }
 
-      // Handle unit modifiers after a number is found
-      if (/(ग्राम|ग्रॅम|गरम|gram|gm|grm)/.test(text)) {
+      // Handle unit modifiers
+      if (/(ग्राम|ग्रॅम|गरम|\bgram\b|\bgrams\b|\bgm\b|\bgrm\b)/.test(text)) {
         voiceUnit = 'g';
-      } else if (/(डझन|डजन|dozen|dzn)/.test(text)) {
+      } else if (/(किलो|किलोग्राम|\bkilo\b|\bkilogram\b|\bkg\b)/.test(text)) {
+        voiceUnit = 'kg';
+      } else if (/(मिली|मिलीलिटर|मिलिलिटर|\bml\b|\bmilli\b)/.test(text)) {
+        voiceUnit = 'ml';
+      } else if (/(लिटर|लीटर|\bliter\b|\blitre\b|\bltr\b|\blit\b)/.test(text)) {
+        voiceUnit = 'l';
+      } else if (/(पॅकेट|\bpacket\b|\bpack\b|\bpkt\b)/.test(text)) {
+        voiceUnit = 'packet';
+      } else if (/(नग|\bpcs\b|\bpiece\b|\bpieces\b)/.test(text)) {
+        voiceUnit = 'pcs';
+      } else if (/(डझन|डजन|\bdozen\b|\bdzn\b)/.test(text)) {
         voiceUnit = 'dozen';
       }
 
-      // Clean the item name by removing all numbers and measurement words
-      let cleanName = text.replace(/([\d\.]+)/g, '')
-        .replace(/(kilo|kg|ग्राम|ग्रॅम|गरम|gram|gm|grm|packet|litre|liter|ltr|किलो|लिटर|पॅकेट)/g, '')
-        .replace(/(छटाक|चटाक|चटक|chatak|chatk|chhatak|catak|shatak|पावशेर|पवशेर|पाव शेर|pavsher|pav sher|paavsher|pausher|powser|pavser|पाव किलो|पाव|paav|pav|paw|pao|पाऊण|पावुन|paun|pahun|pawun|अर्धा|अर्ध|अरधा|ardha|ardh|aradha|सव्वा|सवा|savva|sawa|sava|savwa|दीड|दिड|did|deed|dedh|अडीच|अडिच|adich|adhich|adeech|डझन|डजन|dozen|dzn)/g, '')
-        .trim();
+      // Detect MRP / price signal and preserve it for the search ranking pipeline
+      let priceSuffix = '';
+      const mrpM = text.match(/(?:mrp|एमआरपी)\s*([\d]+)/i);
+      const rateM = !mrpM && text.match(/([\d]+)\s*(?:rupees?|rs\.?|रुपये|रु\.?)/i);
+      if (mrpM) priceSuffix = ` mrp ${mrpM[1]}`;
+      else if (rateM) priceSuffix = ` ${rateM[1]} rupees`;
 
-      // Always save qty/unit context and show the suggestion list so the user can pick.
+      // Clean the item name: remove numbers, unit words, price words, fraction words
+      let cleanName = text.replace(/([\d\.]+)/g, '')
+        .replace(/(kilo|kilogram|\bkg\b|ग्राम|ग्रॅम|गरम|\bgram\b|\bgm\b|\bgrm\b|मिली|\bml\b|लिटर|लीटर|\bliter\b|\blitre\b|\bltr\b|packet|\bpack\b|\bpkt\b|किलो|लिटर|पॅकेट|\bpcs\b|\bpiece\b)/gi, '')
+        .replace(/(rupees?|rs\.?|रुपये|रु\.?|\bmrp\b|एमआरपी|rate|price)/gi, '')
+        .replace(/(छटाक|चटाक|चटक|chatak|chatk|chhatak|catak|shatak|पावशेर|पवशेर|पाव शेर|pavsher|pav sher|paavsher|pausher|powser|pavser|पाव किलो|पाव|paav|pav|paw|pao|पाऊण|पावुन|paun|pahun|pawun|अर्धा|अर्ध|अरधा|ardha|ardh|aradha|सव्वा|सवा|savva|sawa|sava|savwa|दीड|दिड|did|deed|dedh|अडीच|अडिच|adich|adhich|adeech|डझन|डजन|dozen|dzn)/g, '')
+        .replace(/\s+/g, ' ').trim();
+
+      // Save qty/unit for the cart modal and for search ranking
       setVoiceContext({ qty: voiceQty, cartUnit: voiceUnit });
-      // In Marathi mode apply Hinglish→Devanagari transliteration; in English mode use as-is.
-      const searchQuery = cleanName
+
+      // Build the search query: product name + unit signal + price signal
+      // Including unit/price lets parseUserQuery rank the correct variant (e.g., 200g tube vs 100g)
+      const productName = cleanName
         ? (imeEnabled ? (translateHinglishToMarathi(cleanName) || cleanName) : cleanName)
-        : transcript;
-      setQuery(searchQuery);
+        : transcript.toLowerCase();
+      const unitSuffix = voiceUnit ? ` ${voiceQty}${voiceUnit}` : '';
+      setQuery((productName + unitSuffix + priceSuffix).trim());
+
+      // Auto-confirm: if confidence is high, let the suggestions watcher pick the single result
+      if (confidence > 0.75) voiceConfidentRef.current = true;
     };
 
     recognition.start();
@@ -1036,13 +1213,56 @@ export default function App() {
           <div>
             <div className="billing-header">
               <h2 style={{ fontWeight: 'bold', margin: 0 }}>Point of Sale</h2>
-              <button
-                onClick={() => setIsCustomerModalOpen(true)}
-                className="customer-btn"
-              >
-                👤 CUSTOMER {customerName ? `(${customerName})` : ''}
-              </button>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                <button
+                  onClick={() => setIsCustomerModalOpen(true)}
+                  className="customer-btn"
+                >
+                  👤 CUSTOMER {customerName ? `(${customerName})` : ''}
+                </button>
+                <button
+                  onClick={sendToOwner}
+                  disabled={cart.length === 0 || reviewStatus === 'pending'}
+                  style={{
+                    background: cart.length === 0 || reviewStatus === 'pending' ? '#ccc' : '#25D366',
+                    color: 'white', border: 'none', padding: '10px 14px',
+                    borderRadius: 8, fontWeight: 700, cursor: cart.length === 0 || reviewStatus === 'pending' ? 'not-allowed' : 'pointer',
+                    display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap', fontSize: '0.9rem',
+                  }}
+                >
+                  📤 Send to Owner
+                </button>
+              </div>
             </div>
+
+            {/* Owner review status banner */}
+            {reviewStatus === 'pending' && (
+              <div style={{ background: '#FFF9C4', border: '1px solid #F59E0B', borderRadius: 10, padding: '10px 15px', marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <strong style={{ color: '#92400E' }}>⏳ Waiting for owner approval...</strong>
+                  <div style={{ fontSize: '0.78rem', color: '#92400E', marginTop: 2 }}>WhatsApp sent — owner will review and update rates.</div>
+                </div>
+                <button onClick={cancelReview} style={{ background: 'none', border: '1px solid #92400E', color: '#92400E', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: '0.78rem', whiteSpace: 'nowrap', marginLeft: 8 }}>Cancel</button>
+              </div>
+            )}
+            {reviewStatus === 'approved' && approvedSession && (
+              <div style={{ background: '#DCFCE7', border: '1px solid #16A34A', borderRadius: 10, padding: '10px 15px', marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <strong style={{ color: '#15803D' }}>✅ Owner approved the rates!</strong>
+                  {approvedSession.ownerNotes && <div style={{ fontSize: '0.78rem', color: '#15803D', marginTop: 2 }}>Note: {approvedSession.ownerNotes}</div>}
+                </div>
+                <button onClick={applyOwnerRates} style={{ background: '#16A34A', color: 'white', border: 'none', borderRadius: 8, padding: '8px 16px', cursor: 'pointer', fontWeight: 700, marginLeft: 8, whiteSpace: 'nowrap' }}>Apply Rates</button>
+              </div>
+            )}
+            {reviewStatus === 'rejected' && approvedSession && (
+              <div style={{ background: '#FEE2E2', border: '1px solid #DC2626', borderRadius: 10, padding: '10px 15px', marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <strong style={{ color: '#991B1B' }}>❌ Owner rejected the bill</strong>
+                  {approvedSession.ownerNotes && <div style={{ fontSize: '0.78rem', color: '#991B1B', marginTop: 2 }}>Reason: {approvedSession.ownerNotes}</div>}
+                </div>
+                <button onClick={cancelReview} style={{ background: 'none', border: '1px solid #DC2626', color: '#DC2626', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: '0.78rem', whiteSpace: 'nowrap', marginLeft: 8 }}>Dismiss</button>
+              </div>
+            )}
             <div className="card">
               <div className="search-container">
                 <div className="search-inner-row">

@@ -7,8 +7,11 @@ export interface AuthUser {
   picture: string;
 }
 
+const OWNER_EMAIL = import.meta.env.VITE_OWNER_EMAIL ?? '';
+
 interface AuthContextType {
   user: AuthUser | null;
+  isOwner: boolean;
   login: (user: AuthUser) => void;
   logout: () => void;
 }
@@ -36,8 +39,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     localStorage.removeItem('nexus_auth_user');
   };
 
+  const isOwner = !!(user && OWNER_EMAIL && user.email === OWNER_EMAIL);
+
   return (
-    <AuthContext.Provider value={{ user, login, logout }}>
+    <AuthContext.Provider value={{ user, isOwner, login, logout }}>
       {children}
     </AuthContext.Provider>
   );
