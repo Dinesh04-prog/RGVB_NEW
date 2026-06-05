@@ -55,6 +55,7 @@ const getUnitMultiplier = (targetUnit: string, baseUnit: string) => {
 export default function App() {
   const { user, logout } = useAuth();
   const [activeTab, setActiveTab] = useState("billing");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [fuse, setFuse] = useState<Fuse<InventoryItem> | null>(null);
 
@@ -1334,12 +1335,17 @@ export default function App() {
         body { background-color: var(--body-bg); font-family: 'Segoe UI', sans-serif; margin: 0; padding: 0; overflow-x: hidden; }
         *, *::before, *::after { box-sizing: border-box; }
 
-        .sidebar { width: 250px; background: var(--sidebar-bg); height: 100vh; position: fixed; color: white; z-index: 1000; display: block; }
+        .sidebar { width: 250px; background: var(--sidebar-bg); height: 100vh; position: fixed; left: 0; top: 0; color: white; z-index: 1200; display: flex; flex-direction: column; transition: transform 0.25s ease; }
         .nav-link { color: white; padding: 15px 20px; font-weight: 600; cursor: pointer; border-left: 4px solid transparent; text-decoration: none; display: block; }
         .nav-link:hover, .nav-link.active { background: var(--active-nav); border-left: 4px solid #3498db; }
-        .mobile-nav { display: none; position: fixed; bottom: 0; left: 0; width: 100%; background: var(--sidebar-bg); color: white; z-index: 2000; justify-content: space-around; padding: 8px 0 10px; box-shadow: 0 -2px 8px rgba(0,0,0,0.25); }
-        .mobile-nav-item { text-align: center; color: white; text-decoration: none; font-size: 0.72rem; opacity: 0.7; cursor: pointer; flex: 1; padding: 3px 0; }
-        .mobile-nav-item.active { opacity: 1; font-weight: bold; }
+
+        /* Hamburger button — mobile only */
+        .hamburger-btn { display: none; position: fixed; top: 10px; left: 10px; z-index: 1300; background: var(--sidebar-bg); color: white; border: none; border-radius: 8px; width: 42px; height: 42px; cursor: pointer; flex-direction: column; justify-content: center; align-items: center; gap: 5px; box-shadow: 0 2px 8px rgba(0,0,0,0.35); }
+        .hamburger-btn span { display: block; width: 22px; height: 2.5px; background: white; border-radius: 2px; }
+
+        /* Overlay backdrop */
+        .sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 1100; }
+        .sidebar-overlay.open { display: block; }
 
         .main-content { margin-left: 250px; padding: 25px; transition: 0.3s; }
         .card { border-radius: 15px; border: none; box-shadow: 0 4px 12px rgba(0,0,0,0.05); background: white; margin-bottom: 15px; padding: 1rem; }
@@ -1382,13 +1388,19 @@ export default function App() {
         .reports-profit { font-size: 4rem; }
 
         @media (max-width: 992px) {
-            .sidebar { display: none; }
-            .main-content { margin-left: 0; width: 100%; padding: 12px 10px 90px; }
-            .mobile-nav { display: flex; }
+            /* Sidebar hidden off-screen by default; slides in when .open */
+            .sidebar { transform: translateX(-250px); }
+            .sidebar.open { transform: translateX(0); }
+
+            /* Hamburger button visible on mobile */
+            .hamburger-btn { display: flex; }
+
+            /* No bottom nav — main content fills full height */
+            .main-content { margin-left: 0; width: 100%; padding: 60px 10px 24px; }
 
             .billing-header { margin-bottom: 1rem; }
-            .billing-header h2 { font-size: 1.2rem; }
-            .customer-btn { font-size: 0.8rem; padding: 8px 10px; max-width: 160px; }
+            .billing-header h2 { font-size: 1.1rem; }
+            .customer-btn { font-size: 0.78rem; padding: 7px 9px; max-width: 150px; }
 
             .search-inner-row { gap: 6px; }
             #itemNameSearch { height: 46px; font-size: 0.95rem; }
@@ -1420,7 +1432,7 @@ export default function App() {
         @media print {
             * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
             html, body { margin: 0; padding: 0; }
-            .sidebar, .main-content, .mobile-nav, .modal-overlay { display: none !important; }
+            .sidebar, .hamburger-btn, .sidebar-overlay, .main-content, .modal-overlay { display: none !important; }
             #printReceiptArea {
                 display: block !important;
                 visibility: visible !important;
@@ -1456,15 +1468,32 @@ export default function App() {
         @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
       `}} />
 
+      {/* Hamburger button — mobile only */}
+      <button className="hamburger-btn" onClick={() => setSidebarOpen(o => !o)} aria-label="Menu">
+        <span /><span /><span />
+      </button>
+
+      {/* Backdrop — closes sidebar when tapped outside */}
+      <div className={`sidebar-overlay${sidebarOpen ? ' open' : ''}`} onClick={() => setSidebarOpen(false)} />
+
       {/* Sidebar */}
-      <div className="sidebar" style={{ position: 'fixed', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ padding: '1.5rem', textAlign: 'center' }}><h3 style={{ fontWeight: 'bold', margin: 0 }}>Rajendra GVB</h3></div>
-        <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', flex: 1 }}>
-          <a className={`nav-link ${activeTab === 'billing' ? 'active' : ''}`} onClick={() => setActiveTab('billing')}>📝 BILLING</a>
-          <a className={`nav-link ${activeTab === 'inventory' ? 'active' : ''}`} onClick={() => setActiveTab('inventory')} style={{ opacity: activeTab === 'inventory' ? 1 : 0.75 }}>📦 INVENTORY</a>
-          <a className={`nav-link ${activeTab === 'reports' ? 'active' : ''}`} onClick={() => setActiveTab('reports')} style={{ opacity: activeTab === 'reports' ? 1 : 0.75 }}>📊 REPORTS</a>
-          <a className={`nav-link ${activeTab === 'customers' ? 'active' : ''}`} onClick={() => setActiveTab('customers')} style={{ opacity: activeTab === 'customers' ? 1 : 0.75 }}>👥 CUSTOMERS</a>
-          <a className={`nav-link ${activeTab === 'receipts' ? 'active' : ''}`} onClick={() => setActiveTab('receipts')} style={{ opacity: activeTab === 'receipts' ? 1 : 0.75 }}>🧾 RECEIPTS</a>
+      <div className={`sidebar${sidebarOpen ? ' open' : ''}`}>
+        <div style={{ padding: '1.2rem 1.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <h3 style={{ fontWeight: 'bold', margin: 0, fontSize: '1.1rem' }}>Rajendra GVB</h3>
+          {/* Close button — mobile only, hidden on desktop via CSS would need extra class; simple X works everywhere */}
+          <button onClick={() => setSidebarOpen(false)} style={{ background: 'transparent', border: 'none', color: 'white', fontSize: '1.3rem', cursor: 'pointer', lineHeight: 1, padding: 4 }}>✕</button>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
+          {(['billing','inventory','reports','customers','receipts'] as const).map(tab => {
+            const labels: Record<string, string> = { billing: '📝 BILLING', inventory: '📦 INVENTORY', reports: '📊 REPORTS', customers: '👥 CUSTOMERS', receipts: '🧾 RECEIPTS' };
+            return (
+              <a key={tab} className={`nav-link ${activeTab === tab ? 'active' : ''}`}
+                onClick={() => { setActiveTab(tab); setSidebarOpen(false); }}
+                style={{ opacity: activeTab === tab ? 1 : 0.75 }}>
+                {labels[tab]}
+              </a>
+            );
+          })}
         </div>
         {cart.length > 0 && (
           <div style={{ padding: '12px 16px', borderTop: '1px solid rgba(255,255,255,0.15)', borderBottom: '1px solid rgba(255,255,255,0.15)' }}>
@@ -1492,14 +1521,6 @@ export default function App() {
         )}
       </div>
 
-      {/* Mobile Nav */}
-      <div className="mobile-nav">
-        <div className={`mobile-nav-item ${activeTab === 'billing' ? 'active' : ''}`} onClick={() => setActiveTab('billing')}><span>📝</span><br />बिल</div>
-        <div className={`mobile-nav-item ${activeTab === 'inventory' ? 'active' : ''}`} onClick={() => setActiveTab('inventory')}><span>📦</span><br />यादी</div>
-        <div className={`mobile-nav-item ${activeTab === 'reports' ? 'active' : ''}`} onClick={() => setActiveTab('reports')}><span>📊</span><br />अहवाल</div>
-        <div className={`mobile-nav-item ${activeTab === 'customers' ? 'active' : ''}`} onClick={() => setActiveTab('customers')}><span>👥</span><br />ग्राहक</div>
-        <div className={`mobile-nav-item ${activeTab === 'receipts' ? 'active' : ''}`} onClick={() => setActiveTab('receipts')}><span>🧾</span><br />पावती</div>
-      </div>
 
       <div className="main-content">
         {activeTab === 'billing' && (
