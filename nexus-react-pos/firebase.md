@@ -21,3 +21,16 @@ const firebaseConfig = {
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 const analytics = getAnalytics(app);
+
+
+
+
+const firebaseConfig = {
+  apiKey: "AIzaSyA-kdaq0NSKinAUeamjVUErULvZ69Qdt3c",
+  authDomain: "grocery-attendance.firebaseapp.com",
+  projectId: "grocery-attendance",
+  storageBucket: "grocery-attendance.firebasestorage.app",
+  messagingSenderId: "656562898178",
+  appId: "1:656562898178:web:b69ed30623b92a643a6e1b",
+  measurementId: "G-H5J03RNCQ8"
+};

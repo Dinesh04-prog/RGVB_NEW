@@ -7,7 +7,7 @@ import {
   approveReview, rejectReview,
   subscribeToReview, isFirebaseReady,
   saveInventoryItemToCloud, removeInventoryItemFromCloud,
-  subscribeToInventoryOverrides, applyInventoryOverrides,
+  subscribeToInventory,
 } from '../lib/firebase';
 import type { ReviewSession, InventoryItem } from '../lib/firebase';
 import type { CartItem } from '../lib/db';
@@ -108,7 +108,6 @@ export default function OwnerApp({ initialReviewId }: { initialReviewId: string 
   const [stockPage, setStockPage] = useState(1);
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
   const [inventoryEditItem, setInventoryEditItem] = useState<InventoryItem | null>(null);
-  const baseInventoryRef = useRef<InventoryItem[]>([]);
   const invOverridesUnsubRef = useRef<(() => void) | null>(null);
 
   const buildFuse = (items: InventoryItem[]) =>
@@ -126,38 +125,49 @@ export default function OwnerApp({ initialReviewId }: { initialReviewId: string 
       minMatchCharLength: 2, shouldSort: true, includeScore: true,
     });
 
-  // Load inventory + subscribe to Firestore overrides for real-time sync
+  // Load inventory from Firestore (real-time) or LocalForage (offline fallback)
   useEffect(() => {
-    const load = async () => {
-      let items: InventoryItem[] = [];
-      try {
-        const r = await fetch('/inventory.json');
-        if (r.ok) {
-          const json = await r.json();
-          if (Array.isArray(json) && json.length > 0) {
-            items = json;
-            await localforage.setItem('custom_inventory', json);
-          }
+    if (invOverridesUnsubRef.current) invOverridesUnsubRef.current();
+
+    if (isFirebaseReady) {
+      localforage.getItem('custom_inventory').then(cached => {
+        if (cached && Array.isArray(cached) && (cached as InventoryItem[]).length > 0) {
+          setInventory(cached as InventoryItem[]);
+          setFuse(buildFuse(cached as InventoryItem[]));
         }
-      } catch { /* network unavailable — fall through to localforage */ }
-      if (items.length === 0) {
+      });
+      invOverridesUnsubRef.current = subscribeToInventory(items => {
+        if (items.length > 0) {
+          localforage.setItem('custom_inventory', items);
+          setInventory(items);
+          setFuse(buildFuse(items));
+        }
+      });
+    } else {
+      const load = async () => {
+        let items: InventoryItem[] = [];
         const cached = await localforage.getItem('custom_inventory') as InventoryItem[] | null;
-        if (cached && Array.isArray(cached)) items = cached;
-      }
-      if (items.length > 0) {
-        baseInventoryRef.current = items;
-        if (invOverridesUnsubRef.current) invOverridesUnsubRef.current();
-        invOverridesUnsubRef.current = subscribeToInventoryOverrides(overrides => {
-          const merged = applyInventoryOverrides(baseInventoryRef.current, overrides);
-          localforage.setItem('custom_inventory', merged);
-          setInventory(merged);
-          setFuse(buildFuse(merged));
-        });
-        if (!isFirebaseReady) { setInventory(items); setFuse(buildFuse(items)); }
-      }
-    };
-    load();
+        if (cached && Array.isArray(cached) && cached.length > 0) {
+          items = cached;
+        } else {
+          try {
+            const r = await fetch('/inventory.json');
+            if (r.ok) {
+              const json = await r.json();
+              if (Array.isArray(json) && json.length > 0) {
+                items = json;
+                await localforage.setItem('custom_inventory', json);
+              }
+            }
+          } catch { /* network unavailable */ }
+        }
+        setInventory(items);
+        setFuse(buildFuse(items));
+      };
+      load();
+    }
     return () => { if (invOverridesUnsubRef.current) invOverridesUnsubRef.current(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -167,18 +177,16 @@ export default function OwnerApp({ initialReviewId }: { initialReviewId: string 
   }, []);
 
 
-  // Inventory CRUD — push to Firestore so all devices update in real-time
+  // Inventory CRUD — always update local state immediately, then sync to Firestore
   const saveInventoryEdit = async () => {
     if (!inventoryEditItem) return;
-    await saveInventoryItemToCloud(inventoryEditItem);
-    if (!isFirebaseReady) {
-      const exists = inventory.find(i => i.id === inventoryEditItem.id);
-      const newInv = exists
-        ? inventory.map(i => i.id === inventoryEditItem.id ? inventoryEditItem : i)
-        : [...inventory, inventoryEditItem];
-      setInventory(newInv); setFuse(buildFuse(newInv));
-      await localforage.setItem('custom_inventory', newInv);
-    }
+    const exists = inventory.find(i => i.id === inventoryEditItem.id);
+    const newInv = exists
+      ? inventory.map(i => i.id === inventoryEditItem.id ? inventoryEditItem : i)
+      : [...inventory, inventoryEditItem];
+    setInventory(newInv); setFuse(buildFuse(newInv));
+    await localforage.setItem('custom_inventory', newInv);
+    try { await saveInventoryItemToCloud(inventoryEditItem); } catch (err) { console.error('Firebase sync failed:', err); }
     setInventoryEditItem(null);
   };
 
@@ -186,12 +194,10 @@ export default function OwnerApp({ initialReviewId }: { initialReviewId: string 
     if (!inventoryEditItem) return;
     const name = inventoryEditItem.name_marathi || inventoryEditItem.name || 'this item';
     if (!confirm(`Delete "${name}" from inventory? This cannot be undone.`)) return;
-    await removeInventoryItemFromCloud(inventoryEditItem.id);
-    if (!isFirebaseReady) {
-      const newInv = inventory.filter(i => i.id !== inventoryEditItem.id);
-      setInventory(newInv); setFuse(buildFuse(newInv));
-      await localforage.setItem('custom_inventory', newInv);
-    }
+    const newInv = inventory.filter(i => i.id !== inventoryEditItem.id);
+    setInventory(newInv); setFuse(buildFuse(newInv));
+    await localforage.setItem('custom_inventory', newInv);
+    try { await removeInventoryItemFromCloud(inventoryEditItem.id); } catch (err) { console.error('Firebase sync failed:', err); }
     setInventoryEditItem(null);
   };
 

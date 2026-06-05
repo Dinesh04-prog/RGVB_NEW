@@ -415,6 +415,21 @@ export const normalizeForSearch = (text: string): string => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// transliterateDevanagariToLatin — Devanagari → readable romanized form
+// ─────────────────────────────────────────────────────────────────────────────
+export const transliterateDevanagariToLatin = (text: string): string => {
+  if (!text) return '';
+  try {
+    return Sanscript.t(text, 'devanagari', 'itrans')
+      .replace(/A/g, 'aa').replace(/I/g, 'ee').replace(/U/g, 'oo')
+      .replace(/Sh/g, 'sh').replace(/Ch/g, 'ch').replace(/\^/g, '')
+      .replace(/~/g, '').replace(/\|/g, '')
+      .toLowerCase().trim();
+  } catch {
+    return text;
+  }
+};
+
 // translateHinglishToMarathi — romanized Hinglish → Devanagari
 // ─────────────────────────────────────────────────────────────────────────────
 export const translateHinglishToMarathi = (query: string): string => {

@@ -1,8 +1,9 @@
 import { initializeApp, getApps } from 'firebase/app';
 import {
   getFirestore, doc, setDoc, updateDoc,
-  onSnapshot, collection, query, where, orderBy, deleteDoc,
+  onSnapshot, collection, query, where, orderBy, deleteDoc, writeBatch,
 } from 'firebase/firestore';
+import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import type { CartItem } from './db';
 
 export interface InventoryItem {
@@ -18,6 +19,7 @@ export interface InventoryItem {
   stock_quantity?: number;
   stock_qty?: number;
   barcode?: string;
+  unit_rates?: Record<string, number>;
 }
 
 export interface ReviewSession {
@@ -51,6 +53,7 @@ const firebaseApp = isFirebaseReady
   : null;
 
 export const db = firebaseApp ? getFirestore(firebaseApp) : null;
+export const storage = firebaseApp ? getStorage(firebaseApp) : null;
 
 export const createReview = async (session: ReviewSession) => {
   if (!db) throw new Error('Firebase not configured — add keys to .env');
@@ -116,46 +119,46 @@ export const subscribeToAllReviews = (
 // Save (add or edit) a single inventory item to Firestore.
 export const saveInventoryItemToCloud = async (item: InventoryItem) => {
   if (!db) return;
-  await setDoc(doc(db, 'inventory_overrides', item.id), {
-    ...item, _updatedAt: Date.now(),
-  });
+  await setDoc(doc(db, 'inventory', item.id), { ...item, _updatedAt: Date.now() });
 };
 
-// Mark an item as deleted in Firestore so other devices remove it.
+// Delete an item from Firestore.
 export const removeInventoryItemFromCloud = async (id: string) => {
   if (!db) return;
-  await setDoc(doc(db, 'inventory_overrides', id), {
-    _deleted: true, _updatedAt: Date.now(),
-  });
+  await deleteDoc(doc(db, 'inventory', id));
 };
 
-// Real-time listener — fires whenever any item is added/edited/deleted.
-// Returns an unsubscribe function.
-export const subscribeToInventoryOverrides = (
-  cb: (overrides: Record<string, (InventoryItem & { _deleted?: boolean; _updatedAt?: number }) | { _deleted: true; _updatedAt: number }>) => void
+// Real-time listener for the full inventory collection.
+export const subscribeToInventory = (
+  cb: (items: InventoryItem[]) => void
 ) => {
   if (!db) return () => {};
-  return onSnapshot(collection(db, 'inventory_overrides'), snap => {
-    const map: Record<string, any> = {};
-    snap.docs.forEach(d => { map[d.id] = d.data(); });
-    cb(map);
+  return onSnapshot(collection(db, 'inventory'), snap => {
+    const items = snap.docs.map(d => {
+      const { _updatedAt, ...item } = d.data();
+      return item as InventoryItem;
+    });
+    cb(items);
   });
 };
 
-// Merge Firestore overrides on top of a base inventory array.
-// Edited/added items replace the base; deleted items are removed.
-export const applyInventoryOverrides = (
-  base: InventoryItem[],
-  overrides: Record<string, any>
-): InventoryItem[] => {
-  const map = new Map(base.map(i => [i.id, i]));
-  for (const [id, data] of Object.entries(overrides)) {
-    if (data._deleted) {
-      map.delete(id);
-    } else {
-      const { _deleted: _d, _updatedAt: _t, ...item } = data;
-      map.set(id, item as InventoryItem);
-    }
+// Batch-write all inventory items to Firestore (chunks of 500 to respect Firestore limits).
+export const bulkSaveInventoryToFirestore = async (items: InventoryItem[]) => {
+  if (!db) return;
+  const CHUNK = 500;
+  for (let i = 0; i < items.length; i += CHUNK) {
+    const batch = writeBatch(db);
+    items.slice(i, i + CHUNK).forEach(item => {
+      batch.set(doc(db!, 'inventory', item.id), { ...item, _updatedAt: Date.now() });
+    });
+    await batch.commit();
   }
-  return Array.from(map.values());
+};
+
+// Upload the raw xlsx file to Firebase Storage at inventory/latest.xlsx.
+export const uploadInventoryXlsx = async (file: File): Promise<string> => {
+  if (!storage) throw new Error('Firebase Storage not configured');
+  const storageRef = ref(storage, 'inventory/latest.xlsx');
+  const snapshot = await uploadBytes(storageRef, file);
+  return getDownloadURL(snapshot.ref);
 };
