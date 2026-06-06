@@ -2559,13 +2559,13 @@ export default function App() {
 
             <label style={{ fontSize: '0.72rem', fontWeight: 'bold', color: '#6c757d', display: 'block', marginBottom: 4 }}>ITEM NAME</label>
             <input
+              autoFocus
               type="text"
               className="edit-input"
               style={{ marginBottom: 14 }}
               placeholder="e.g. Aashirvaad Atta"
               value={quickAddItem.name}
               onChange={(e) => setQuickAddItem({ ...quickAddItem, name: e.target.value })}
-              ref={(el) => { if (el) el.focus(); }}
             />
 
             <label style={{ fontSize: '0.72rem', fontWeight: 'bold', color: '#6c757d', display: 'block', marginBottom: 4 }}>SALE PRICE ₹</label>
