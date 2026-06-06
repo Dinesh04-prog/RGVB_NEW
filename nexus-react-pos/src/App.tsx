@@ -1395,26 +1395,39 @@ export default function App() {
             /* Hamburger button visible on mobile */
             .hamburger-btn { display: flex; }
 
-            /* No bottom nav — main content fills full height */
-            .main-content { margin-left: 0; width: 100%; padding: 60px 10px 24px; }
+            /* Main content: full width, breathing room below hamburger */
+            .main-content { margin-left: 0; width: 100%; padding: 62px 12px 28px; }
 
-            .billing-header { margin-bottom: 1rem; }
-            .billing-header h2 { font-size: 1.1rem; }
-            .customer-btn { font-size: 0.78rem; padding: 7px 9px; max-width: 150px; }
+            /* Billing header */
+            .billing-header { margin-bottom: 0.75rem; }
+            .billing-header h2 { font-size: 1rem; }
 
+            /* Action buttons — show only the icon on mobile, hide label text */
+            .billing-action-btn .btn-text { display: none; }
+            .billing-action-btn { padding: 10px 12px !important; }
+            .customer-btn { font-size: 0.78rem; padding: 10px 12px !important; max-width: unset; }
+
+            /* Search row */
             .search-inner-row { gap: 6px; }
             #itemNameSearch { height: 46px; font-size: 0.95rem; }
             .scan-btn { height: 46px; font-size: 1.2rem; padding: 6px 8px; }
             .ime-btn { height: 46px; min-width: 42px; padding: 0 8px; font-size: 0.85rem; }
             .mic-btn { height: 46px; padding: 0 12px; font-size: 0.85rem; }
             .suggestions-container { top: 52px; }
+            /* Larger tap targets in suggestion list */
+            .suggestion-item { padding: 13px 12px; min-height: 48px; }
 
-            .total-bar { border-radius: 8px; padding: 10px 12px; }
-            .total-bar h3 { font-size: 1rem; }
-            .checkout-btn { padding: 8px 14px; font-size: 0.9rem; }
+            /* Total bar */
+            .total-bar { border-radius: 10px; padding: 12px 14px; }
+            .total-bar h3 { font-size: 1.05rem; }
+            .checkout-btn { padding: 11px 20px; font-size: 0.95rem; font-weight: 900; border-radius: 9px; }
 
             .mobile-cart-card { display: block; }
             .desktop-cart-table { display: none; }
+
+            /* Kirana inventory columns — narrower so they fit on 360 px screens */
+            .kirana-vals { grid-template-columns: 58px 62px 52px; }
+            .kirana-col-header { grid-template-columns: 58px 62px 52px; }
 
             .reports-profit { font-size: 2.5rem; }
 
@@ -1532,29 +1545,32 @@ export default function App() {
                 <button
                   onClick={holdBill}
                   disabled={cart.length === 0}
+                  className="billing-action-btn"
                   style={{ background: cart.length === 0 ? '#ccc' : '#f59e0b', color: 'white', border: 'none', padding: '10px 14px', borderRadius: 8, fontWeight: 700, cursor: cart.length === 0 ? 'not-allowed' : 'pointer', fontSize: '0.9rem', whiteSpace: 'nowrap' }}
                 >
-                  ⏸ HOLD
+                  ⏸ <span className="btn-text">HOLD</span>
                 </button>
                 {/* Resume held bills */}
                 {heldBills.length > 0 && (
                   <button
                     onClick={() => setShowHeldBills(true)}
+                    className="billing-action-btn"
                     style={{ background: '#6366f1', color: 'white', border: 'none', padding: '10px 14px', borderRadius: 8, fontWeight: 700, cursor: 'pointer', fontSize: '0.9rem', whiteSpace: 'nowrap', position: 'relative' }}
                   >
-                    ▶ RESUME
+                    ▶ <span className="btn-text">RESUME</span>
                     <span style={{ background: '#ef4444', color: 'white', borderRadius: '999px', fontSize: '0.7rem', padding: '1px 6px', marginLeft: 6, fontWeight: 900 }}>{heldBills.length}</span>
                   </button>
                 )}
                 <button
                   onClick={() => setIsCustomerModalOpen(true)}
-                  className="customer-btn"
+                  className="customer-btn billing-action-btn"
                 >
-                  👤 CUSTOMER {customerName ? `(${customerName})` : ''}
+                  👤 <span className="btn-text">CUSTOMER {customerName ? `(${customerName})` : ''}</span>
                 </button>
                 <button
                   onClick={sendToOwner}
                   disabled={cart.length === 0 || reviewStatus === 'pending'}
+                  className="billing-action-btn"
                   style={{
                     background: cart.length === 0 || reviewStatus === 'pending' ? '#ccc' : '#25D366',
                     color: 'white', border: 'none', padding: '10px 14px',
@@ -1562,7 +1578,7 @@ export default function App() {
                     display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap', fontSize: '0.9rem',
                   }}
                 >
-                  📤 Send to Owner
+                  📤 <span className="btn-text">Send to Owner</span>
                 </button>
               </div>
             </div>
@@ -1719,20 +1735,21 @@ export default function App() {
             {/* Mobile: Card view */}
             <div className="mobile-cart-card">
               {cart.map((c, i) => (
-                <div key={i} className="card" style={{ padding: '12px', marginBottom: '8px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                    <div style={{ flex: 1, cursor: 'pointer' }} onClick={() => editCartItem(i)}>
-                      <div style={{ fontWeight: 'bold', fontSize: '0.95rem', color: '#0a3d62' }}>{c.name.toUpperCase()} <small style={{ color: '#6c757d' }}>({c.unit})</small></div>
-                      <div style={{ display: 'flex', gap: '15px', marginTop: '6px', fontSize: '0.85rem', color: '#555' }}>
-                        <span>Qty: <b>{c.qty} {c.cartUnit && c.cartUnit !== c.unit ? c.cartUnit : ""}</b></span>
+                <div key={i} className="card" style={{ padding: '14px', marginBottom: '8px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+                    <div style={{ flex: 1, cursor: 'pointer', minWidth: 0 }} onClick={() => editCartItem(i)}>
+                      <div style={{ fontWeight: 'bold', fontSize: '1rem', color: '#0a3d62', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {c.name.toUpperCase()} <small style={{ color: '#6c757d', fontWeight: 'normal' }}>({c.unit})</small>
+                      </div>
+                      <div style={{ display: 'flex', gap: '12px', marginTop: '5px', fontSize: '0.88rem', color: '#555', flexWrap: 'wrap' }}>
+                        <span>Qty: <b>{c.qty}{c.cartUnit && c.cartUnit !== c.unit ? ` ${c.cartUnit}` : ""}</b></span>
                         <span>Rate: <b>₹{(c.rate * (c.multiplier || 1)).toFixed(2)}</b></span>
                       </div>
+                      <div style={{ fontSize: '0.7rem', color: '#9ca3af', marginTop: 3 }}>✏ tap to edit</div>
                     </div>
-                    <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontWeight: 'bold', color: '#0d6efd', fontSize: '1.1rem' }}>₹{c.total.toFixed(2)}</div>
-                      <div style={{ marginTop: '6px' }}>
-                        <button className="btn-action danger" onClick={() => removeCartItem(i)} style={{ padding: '4px 10px', fontSize: '0.8rem' }}>✕</button>
-                      </div>
+                    <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                      <div style={{ fontWeight: 'bold', color: '#0d6efd', fontSize: '1.15rem', marginBottom: 6 }}>₹{c.total.toFixed(2)}</div>
+                      <button className="btn-action danger" onClick={() => removeCartItem(i)} style={{ padding: '8px 14px', fontSize: '0.9rem', borderRadius: 6 }}>✕</button>
                     </div>
                   </div>
                 </div>
