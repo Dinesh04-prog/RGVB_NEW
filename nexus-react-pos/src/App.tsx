@@ -87,6 +87,9 @@ export default function App() {
   const [heldBills, setHeldBills] = useState<{ id: string; cart: CartItem[]; customerName: string; customerPhone: string; heldAt: number }[]>([]);
   const [showHeldBills, setShowHeldBills] = useState(false);
 
+  // Quick-add new item while billing
+  const [quickAddItem, setQuickAddItem] = useState<{ name: string; price: string; unit: string } | null>(null);
+
   // Reports state
   const [totalProfit, setTotalProfit] = useState(0);
   const [allSales, setAllSales] = useState<Receipt[]>([]);
@@ -824,7 +827,7 @@ export default function App() {
       speakText(`${name}, ${qty} ${cartUnit || "unit"} added`);
     }
     setModalItem(null);
-    searchInputRef.current?.focus();
+    if (window.innerWidth > 992) searchInputRef.current?.focus();
   };
 
   const editCartItem = (index: number) => {
@@ -862,6 +865,36 @@ export default function App() {
     const updated = heldBills.filter(h => h.id !== id);
     setHeldBills(updated);
     await localforage.setItem('held_bills', updated);
+  };
+
+  const handleQuickAdd = async () => {
+    if (!quickAddItem) return;
+    const name = quickAddItem.name.trim();
+    const price = parseFloat(quickAddItem.price);
+    const unit  = quickAddItem.unit.trim() || 'pcs';
+    if (!name)                  { alert('Item name is required.'); return; }
+    if (isNaN(price) || price <= 0) { alert('Enter a valid sale price.'); return; }
+
+    const newItem: InventoryItem = {
+      id: `QA-${Date.now()}`,
+      name,
+      name_marathi: name,
+      name_eng: name,
+      unit,
+      price,
+      stock_quantity: 0,
+      stock_qty: 0,
+    };
+
+    const newInv = [...inventory, newItem];
+    setInventory(newInv);
+    setFuse(new Fuse(newInv, fuseOptions));
+    await localforage.setItem('custom_inventory', newInv);
+    try { saveInventoryItemToCloud(newItem); } catch (_) {}
+
+    setQuickAddItem(null);
+    setQuery('');
+    selectItemForModal(newItem);
   };
 
   const getNextBillNumber = async () => {
@@ -1351,7 +1384,8 @@ export default function App() {
         .card { border-radius: 15px; border: none; box-shadow: 0 4px 12px rgba(0,0,0,0.05); background: white; margin-bottom: 15px; padding: 1rem; }
 
         .billing-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; gap: 10px; flex-wrap: wrap; }
-        .customer-btn { background: #0d6efd; color: white; border: none; padding: 10px 15px; border-radius: 8px; font-weight: bold; cursor: pointer; display: flex; align-items: center; gap: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+        .customer-btn { background: #f1f5f9; color: #0d6efd; border: 1.5px solid #cbd5e1; padding: 10px 15px; border-radius: 8px; font-weight: bold; cursor: pointer; display: flex; align-items: center; gap: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+        .customer-btn.active-cust { background: #e0f2fe; border-color: #0d6efd; }
 
         .search-container { position: relative; }
         .search-inner-row { display: flex; width: 100%; gap: 10px; align-items: center; }
@@ -1563,7 +1597,7 @@ export default function App() {
                 )}
                 <button
                   onClick={() => setIsCustomerModalOpen(true)}
-                  className="customer-btn billing-action-btn"
+                  className={`customer-btn billing-action-btn${customerName ? ' active-cust' : ''}`}
                 >
                   👤 <span className="btn-text">CUSTOMER {customerName ? `(${customerName})` : ''}</span>
                 </button>
@@ -1682,16 +1716,36 @@ export default function App() {
                 {suggestions.length > 0 && (
                   <div className="suggestions-container">
                     {suggestions.map((s, idx) => (
-                      <div 
-                        key={s.id} 
-                        className={`suggestion-item ${idx === selectedSuggestionIndex ? 'active' : ''}`} 
+                      <div
+                        key={s.id}
+                        className={`suggestion-item ${idx === selectedSuggestionIndex ? 'active' : ''}`}
                         onClick={() => selectItemForModal(s)}
                         onMouseEnter={() => setSelectedSuggestionIndex(idx)}
                       >
                         <span><b>{formatName(s.name_marathi || s.name_eng || s.name).toUpperCase()}</b> <small style={{ color: '#6c757d' }}>({s.unit || 'unit'})</small>{s.brand && <small style={{ color: '#0a3d62', fontWeight: 600, marginLeft: '5px' }}>({s.brand})</small>}</span>
-                        <span>₹{Number(s.price || 0).toFixed(3)}</span>
+                        <span>₹{Number(s.price || 0).toFixed(2)}</span>
                       </div>
                     ))}
+                    {/* Quick-add at bottom of results */}
+                    <div
+                      className="suggestion-item"
+                      style={{ borderTop: '1px dashed #e5e7eb', background: '#f8fafc', justifyContent: 'center', gap: 8, color: '#0d6efd', fontWeight: 700, fontSize: '0.88rem' }}
+                      onClick={() => setQuickAddItem({ name: query.trim(), price: '', unit: 'pcs' })}
+                    >
+                      ➕ Add "{query.trim()}" as new item
+                    </div>
+                  </div>
+                )}
+                {/* No results prompt */}
+                {query.trim().length >= 2 && suggestions.length === 0 && (
+                  <div className="suggestions-container" style={{ padding: '12px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+                    <span style={{ color: '#9ca3af', fontSize: '0.85rem' }}>"{query.trim()}" not found</span>
+                    <button
+                      onClick={() => setQuickAddItem({ name: query.trim(), price: '', unit: 'pcs' })}
+                      style={{ background: '#0d6efd', color: 'white', border: 'none', borderRadius: 7, padding: '7px 13px', fontWeight: 700, fontSize: '0.85rem', cursor: 'pointer', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 5 }}
+                    >
+                      ➕ Add New Item
+                    </button>
                   </div>
                 )}
               </div>
@@ -2137,7 +2191,7 @@ export default function App() {
             </div>
             <div style={{ display: 'flex', gap: '10px', marginBottom: '15px' }}>
               <input
-                autoFocus
+                ref={(el) => { if (el && window.innerWidth > 992) { el.focus(); el.select(); } }}
                 type="number"
                 inputMode="decimal"
                 className="modal-input"
@@ -2479,6 +2533,57 @@ export default function App() {
         </div>
       )}
 
+      {/* Quick-add new inventory item while billing */}
+      {quickAddItem && (
+        <div className="modal-overlay" style={{ zIndex: 4000 }}>
+          <div className="modal-content" style={{ maxWidth: 380, width: '95%' }}>
+            <div className="modal-header">
+              <span>➕ ADD NEW ITEM</span>
+              <button style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: '1.3rem' }} onClick={() => setQuickAddItem(null)}>✕</button>
+            </div>
+            <p style={{ fontSize: '0.78rem', color: '#6c757d', margin: '-8px 0 14px' }}>Saved to inventory automatically.</p>
+
+            <label style={{ fontSize: '0.72rem', fontWeight: 'bold', color: '#6c757d', display: 'block', marginBottom: 4 }}>ITEM NAME</label>
+            <input
+              type="text"
+              className="edit-input"
+              style={{ marginBottom: 14 }}
+              value={quickAddItem.name}
+              onChange={(e) => setQuickAddItem({ ...quickAddItem, name: e.target.value })}
+              ref={(el) => { if (el && window.innerWidth > 992) el.focus(); }}
+            />
+
+            <label style={{ fontSize: '0.72rem', fontWeight: 'bold', color: '#6c757d', display: 'block', marginBottom: 4 }}>SALE PRICE ₹</label>
+            <input
+              type="number"
+              inputMode="decimal"
+              className="edit-input"
+              style={{ marginBottom: 14 }}
+              placeholder="0"
+              value={quickAddItem.price}
+              onChange={(e) => setQuickAddItem({ ...quickAddItem, price: e.target.value })}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleQuickAdd(); } }}
+            />
+
+            <label style={{ fontSize: '0.72rem', fontWeight: 'bold', color: '#6c757d', display: 'block', marginBottom: 4 }}>UNIT</label>
+            <select
+              className="edit-input"
+              style={{ marginBottom: 18 }}
+              value={quickAddItem.unit}
+              onChange={(e) => setQuickAddItem({ ...quickAddItem, unit: e.target.value })}
+            >
+              {['pcs','kg','g','L','ml','packet','box','bag','dozen','mal'].map(u => (
+                <option key={u} value={u}>{u}</option>
+              ))}
+            </select>
+
+            <button className="modal-btn" onClick={handleQuickAdd} style={{ background: '#16a34a' }}>
+              ✅ SAVE &amp; ADD TO BILL
+            </button>
+          </div>
+        </div>
+      )}
+
       {showHeldBills && (
         <div className="modal-overlay" style={{ zIndex: 4000 }}>
           <div className="modal-content" style={{ maxWidth: '420px', width: '95%' }}>
@@ -2561,7 +2666,7 @@ export default function App() {
                 placeholder="Enter customer name"
                 value={customerName}
                 onChange={(e) => setCustomerName(e.target.value)}
-                autoFocus
+                ref={(el) => { if (el && window.innerWidth > 992) el.focus(); }}
               />
 
               <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#6c757d', marginBottom: '5px', marginTop: '15px', display: 'block' }}>MOBILE NUMBER</label>
