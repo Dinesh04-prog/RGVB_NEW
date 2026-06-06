@@ -88,7 +88,7 @@ export default function App() {
   const [showHeldBills, setShowHeldBills] = useState(false);
 
   // Quick-add new item while billing
-  const [quickAddItem, setQuickAddItem] = useState<{ name: string; price: string; unit: string } | null>(null);
+  const [quickAddItem, setQuickAddItem] = useState<{ name: string; price: string; unit: string; barcode?: string } | null>(null);
 
   // Reports state
   const [totalProfit, setTotalProfit] = useState(0);
@@ -413,7 +413,8 @@ export default function App() {
       if (results && results.length > 0) {
         selectItemForModal(results[0].item);
       } else {
-        setQuery(clean);
+        // Barcode not in inventory — open quick-add with barcode pre-attached
+        setQuickAddItem({ name: '', price: '', unit: 'pcs', barcode: clean });
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -882,6 +883,7 @@ export default function App() {
       name_eng: name,
       unit,
       price,
+      barcode: quickAddItem.barcode || '',
       stock_quantity: 0,
       stock_qty: 0,
     };
@@ -2541,16 +2543,29 @@ export default function App() {
               <span>➕ ADD NEW ITEM</span>
               <button style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: '1.3rem' }} onClick={() => setQuickAddItem(null)}>✕</button>
             </div>
-            <p style={{ fontSize: '0.78rem', color: '#6c757d', margin: '-8px 0 14px' }}>Saved to inventory automatically.</p>
+
+            {/* Barcode badge — shown when triggered from scanner */}
+            {quickAddItem.barcode ? (
+              <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: '7px 12px', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: '1rem' }}>📷</span>
+                <div>
+                  <div style={{ fontSize: '0.68rem', color: '#15803d', fontWeight: 700, letterSpacing: '0.04em' }}>SCANNED BARCODE</div>
+                  <div style={{ fontFamily: 'monospace', fontSize: '0.92rem', color: '#166534', fontWeight: 700 }}>{quickAddItem.barcode}</div>
+                </div>
+              </div>
+            ) : (
+              <p style={{ fontSize: '0.78rem', color: '#6c757d', margin: '-8px 0 14px' }}>Saved to inventory automatically.</p>
+            )}
 
             <label style={{ fontSize: '0.72rem', fontWeight: 'bold', color: '#6c757d', display: 'block', marginBottom: 4 }}>ITEM NAME</label>
             <input
               type="text"
               className="edit-input"
               style={{ marginBottom: 14 }}
+              placeholder="e.g. Aashirvaad Atta"
               value={quickAddItem.name}
               onChange={(e) => setQuickAddItem({ ...quickAddItem, name: e.target.value })}
-              ref={(el) => { if (el && window.innerWidth > 992) el.focus(); }}
+              ref={(el) => { if (el) el.focus(); }}
             />
 
             <label style={{ fontSize: '0.72rem', fontWeight: 'bold', color: '#6c757d', display: 'block', marginBottom: 4 }}>SALE PRICE ₹</label>
