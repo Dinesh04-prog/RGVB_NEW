@@ -106,6 +106,12 @@ export default function App() {
   const [receiptSearch, setReceiptSearch] = useState("");
   const receiptCardRef = useRef<HTMLDivElement>(null);
 
+  // Bluetooth Printer
+  const [btStatus, setBtStatus] = useState<'idle'|'connecting'|'connected'|'error'>('idle');
+  const [btDeviceName, setBtDeviceName] = useState('');
+  const btPrinterCharRef = useRef<any>(null);
+  const btPrinterDevRef  = useRef<any>(null);
+
   const formatName = (name: string) => {
     return (name || "").replace(/\s*\([\d\.\s]*(kg|g|gm|ml|l|L|Piece|Pack|Pack of \d+|unit|liter|litre)\)\s*$/i, "").trim();
   };
@@ -1170,6 +1176,486 @@ export default function App() {
     recognition.start();
   };
 
+  // ── Bluetooth Printer ────────────────────────────────────────────────────────
+  // Service/characteristic UUID pairs tried in order (covers most BLE thermal printers)
+  const BT_PROFILES = [
+    { svc: '0000ff00-0000-1000-8000-00805f9b34fb', chr: '0000ff02-0000-1000-8000-00805f9b34fb' },
+    { svc: '000018f0-0000-1000-8000-00805f9b34fb', chr: '00002af1-0000-1000-8000-00805f9b34fb' },
+    { svc: 'e7810a71-73ae-499d-8c15-faa9aef0c3f2', chr: 'bef8d6c9-9c21-4c9e-b632-bd58c1009f9f' },
+    { svc: '49535343-fe7d-4ae5-8fa9-9fafd205e455', chr: '49535343-8841-43f4-a8d4-ecbe34729bb3' },
+    { svc: '6e400001-b5ba-f393-e0a9-e50e24dcca9e', chr: '6e400002-b5ba-f393-e0a9-e50e24dcca9e' },
+  ];
+
+  const connectBtPrinter = async () => {
+    const bt = (navigator as any).bluetooth;
+    if (!bt) {
+      alert('Web Bluetooth is not supported in this browser.\n\n• Use Google Chrome on Android.\n• iOS Safari does not support Web Bluetooth.');
+      return;
+    }
+    setBtStatus('connecting');
+    try {
+      const device = await bt.requestDevice({
+        acceptAllDevices: true,
+        optionalServices: BT_PROFILES.map(p => p.svc),
+      });
+      device.addEventListener('gattserverdisconnected', () => {
+        // Clear refs and update UI state when the printer disconnects.
+        setBtStatus('idle');
+        btPrinterCharRef.current = null;
+        btPrinterDevRef.current = null;
+        setBtDeviceName('');
+      });
+      const server = await device.gatt.connect();
+      let foundChar: any = null;
+      for (const p of BT_PROFILES) {
+        try {
+          const svc = await server.getPrimaryService(p.svc);
+          foundChar = await svc.getCharacteristic(p.chr);
+          break;
+        } catch (_) {}
+      }
+      if (!foundChar) {
+        setBtStatus('error');
+        device.gatt.disconnect();
+        alert('Connected to device but could not find the printer service.\nMake sure the printer is powered on and in BLE pairing mode.');
+        return;
+      }
+      btPrinterDevRef.current  = device;
+      btPrinterCharRef.current = foundChar;
+      setBtDeviceName(device.name || 'Bluetooth Printer');
+      setBtStatus('connected');
+    } catch (err: any) {
+      if (err.name !== 'NotFoundError' && err.name !== 'AbortError') {
+        setBtStatus('error');
+        alert(`Bluetooth error: ${err.message}`);
+      } else {
+        setBtStatus('idle');
+      }
+    }
+  };
+
+  const disconnectBtPrinter = () => {
+    btPrinterDevRef.current?.gatt?.disconnect();
+    btPrinterDevRef.current  = null;
+    btPrinterCharRef.current = null;
+    setBtStatus('idle');
+    setBtDeviceName('');
+  };
+
+  const btSend = async (data: Uint8Array) => {
+    const chr = btPrinterCharRef.current;
+    if (!chr) throw new Error('Printer not connected');
+
+    // Many BLE printers expect small MTU-sized writes (commonly 20 bytes).
+    // Use writeWithoutResponse when available to improve throughput, otherwise
+    // fall back to writeValue. Add simple retry/backoff to reduce transient
+    // GATT operation errors.
+    const CHUNK = 20;
+    const canWriteWithoutResponse = !!(chr.writeValueWithoutResponse) && chr.properties && chr.properties.writeWithoutResponse;
+
+    const writeChunk = async (chunk: Uint8Array) => {
+      const MAX_ATTEMPTS = 3;
+      let attempt = 0;
+      while (true) {
+        try {
+          if (canWriteWithoutResponse) {
+            await chr.writeValueWithoutResponse(chunk);
+          } else {
+            await chr.writeValue(chunk);
+          }
+          return;
+        } catch (err) {
+          attempt++;
+          if (attempt >= MAX_ATTEMPTS) throw err;
+          // small backoff before retry
+          await new Promise(r => setTimeout(r, 100 * attempt));
+        }
+      }
+    };
+
+    console.debug('[btSend] total bytes ->', data.length);
+    for (let i = 0; i < data.length; i += CHUNK) {
+      const slice = data.slice(i, Math.min(i + CHUNK, data.length));
+      await writeChunk(slice);
+      // avoid flooding the device even when using withoutResponse
+      await new Promise(r => setTimeout(r, 10));
+    }
+    console.debug('[btSend] finished');
+  };
+
+  const buildEscPos = (r: Receipt, rasterProvider?: (item: any, index: number) => Uint8Array | null): Uint8Array => {
+    // 80 mm paper — 40 printable chars per line at standard font (203 DPI).
+    // Column layout matches the on-screen receipt: ITEM | QTY | RATE | AMT
+    //   ITEM 18 chars (left) | QTY 5 (right) | RATE 8 (right) | AMT 9 (right) = 40
+    //
+    // Padding uses Unicode code-point counting ([...s].length) so Devanagari
+    // characters (1 code point each) align correctly when the printer is in
+    // UTF-8 mode (switched on by ESC t 0x52 below).
+    const W = 48;
+    const C1 = 19, C2 = 10, C3 = 9, C4 = 9; // column widths, must sum to W
+
+    const enc = new TextEncoder();
+    const buf: number[] = [];
+
+    const b   = (...n: number[]) => buf.push(...n);
+    const str = (s: string)      => buf.push(...enc.encode(s));
+    const nl  = ()               => b(0x0A);
+
+    // Pad by code-point count so Devanagari characters are counted as 1 each.
+    const pL = (s: string, w: number) => {
+      const cp = [...s]; // spread splits into Unicode code points
+      const t  = cp.slice(0, w).join('');
+      return t + ' '.repeat(Math.max(0, w - cp.length));
+    };
+    const pR = (s: string, w: number) => {
+      const cp = [...s];
+      const t  = cp.slice(0, w).join('');
+      return ' '.repeat(Math.max(0, w - cp.length)) + t;
+    };
+
+    // ── Init ────────────────────────────────────────────────
+    b(0x1B, 0x40);        // ESC @   — full printer reset
+    b(0x1B, 0x74, 0x52); // ESC t 82 — switch to UTF-8 code table
+                          //   (supported on most modern BLE thermal printers;
+                          //    ignored silently by printers that don't support it)
+
+    // ── Store header (centered, bold, double width+height) ──
+    b(0x1B, 0x61, 0x01);  // align centre
+    b(0x1B, 0x45, 0x01);  // bold on
+    b(0x1D, 0x21, 0x11);  // double width + height
+    str('RAJENDRA GVB'); nl();
+    b(0x1D, 0x21, 0x00);  // normal size
+    b(0x1B, 0x45, 0x00);  // bold off
+    str('Fresh Groceries & More'); nl();
+
+    // ── Divider ─────────────────────────────────────────────
+    b(0x1B, 0x61, 0x00);  // align left
+    str('='.repeat(W)); nl();
+
+    // ── Bill info ────────────────────────────────────────────
+    b(0x1B, 0x45, 0x01);  // bold on
+    str(`Bill No : ${r.receipt_no}`); nl();
+    b(0x1B, 0x45, 0x00);  // bold off
+    str(`Date    : ${r.date}`); nl();
+    if (r.customerName)  { str(`Customer: ${r.customerName}`);  nl(); }
+    if (r.customerPhone) { str(`Mobile  : ${r.customerPhone}`); nl(); }
+    str('-'.repeat(W)); nl();
+
+    // ── Column headers ───────────────────────────────────────
+    b(0x1B, 0x45, 0x01);  // bold on
+    str(pL('ITEM', C1) + pR('QTY', C2) + pR('RATE', C3) + pR('AMT', C4)); nl();
+    b(0x1B, 0x45, 0x00);  // bold off
+    str('-'.repeat(W)); nl();
+
+    // ── Items (one row per item) ─────────────────────────────
+    // Padding is code-point based: a 4-char Devanagari word counts as 4,
+    // so it fills exactly 4 cells on a UTF-8-aware printer — not 12 bytes.
+    for (let i = 0; i < r.items.length; i++) {
+      const item     = r.items[i];
+      const unit     = item.cartUnit && item.cartUnit !== item.unit ? item.cartUnit : item.unit;
+      const qtyStr   = `${item.qty}${unit}`;
+      const rateStr  = (item.rate * (item.multiplier || 1)).toFixed(2);
+      const amtStr   = item.total.toFixed(2);
+      const nameCell = pL(`${i + 1}.${item.name}`, C1);
+      // If a rasterProvider is supplied and wants to render this item's name
+      // as a bitmap (for example, Devanagari glyphs that should be rasterized),
+      // ask it for raster bytes. If provided, append the raster and skip the
+      // normal text-line for the name; still print qty/rate/amt as text
+      // afterwards.
+      if (rasterProvider) {
+        const raster = rasterProvider(item, i);
+        if (raster) {
+          // push raster bytes directly (raster contains GS v 0 header + bitmap
+          // for the full row including qty/rate/amt). Do not add extra newlines
+          // here — the raster height controls vertical advance.
+          buf.push(...raster);
+          continue;
+        }
+      }
+
+      str(nameCell + pR(qtyStr, C2) + pR(rateStr, C3) + pR(amtStr, C4)); nl();
+    }
+
+    // item count — right-aligned
+    const countStr = `${r.items.length} item${r.items.length !== 1 ? 's' : ''}`;
+    str(pL(countStr, W)); nl();
+
+    // ── Total ────────────────────────────────────────────────
+    str('='.repeat(W)); nl();
+    b(0x1B, 0x45, 0x01);  // bold on
+    b(0x1D, 0x21, 0x01);  // double height
+    const totalLabel = 'TOTAL';
+    const totalAmt   = `Rs.${r.total.toFixed(2)}`;
+    str(pL(totalLabel, W - [...totalAmt].length) + totalAmt); nl();
+    b(0x1D, 0x21, 0x00);  // normal
+    b(0x1B, 0x45, 0x00);  // bold off
+    str('='.repeat(W)); nl();
+
+    // ── Footer ───────────────────────────────────────────────
+    b(0x1B, 0x61, 0x01);  // align centre
+    str('Thank You... Visit Again!'); nl(); // em dash U+2014
+    nl(); nl(); nl();
+    b(0x1D, 0x56, 0x41, 0x10); // cut
+
+    return new Uint8Array(buf);
+  };
+
+  // Convert a canvas to ESC/POS GS v 0 raster — printer prints dots, no font table needed.
+  const canvasToEscPosRaster = (canvas: HTMLCanvasElement): Uint8Array => {
+    const W = canvas.width, H = canvas.height;
+    const ctx = canvas.getContext('2d')!;
+    const img = ctx.getImageData(0, 0, W, H);
+    const px = img.data;
+
+    // Convert to grayscale float array
+    const gray = new Float32Array(W * H);
+    for (let i = 0, p = 0; i < W * H; i++, p += 4) {
+      gray[i] = 0.299 * px[p] + 0.587 * px[p + 1] + 0.114 * px[p + 2];
+    }
+
+    // Floyd–Steinberg dithering (error diffusion)
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const idx = y * W + x;
+        const oldVal = gray[idx];
+        const newVal = oldVal < 128 ? 0 : 255;
+        const err = oldVal - newVal;
+        gray[idx] = newVal;
+        if (x + 1 < W) gray[idx + 1] += err * 7 / 16;
+        if (x - 1 >= 0 && y + 1 < H) gray[idx + W - 1] += err * 3 / 16;
+        if (y + 1 < H) gray[idx + W] += err * 5 / 16;
+        if (x + 1 < W && y + 1 < H) gray[idx + W + 1] += err * 1 / 16;
+      }
+    }
+
+    const bpr = Math.ceil(W / 8);
+    const raster: number[] = [];
+    for (let y = 0; y < H; y++) {
+      for (let xb = 0; xb < bpr; xb++) {
+        let byte = 0;
+        for (let bit = 0; bit < 8; bit++) {
+          const x = xb * 8 + bit;
+          if (x < W) {
+            const i = y * W + x;
+            if (gray[i] < 128) byte |= (0x80 >> bit);
+          }
+        }
+        raster.push(byte);
+      }
+    }
+
+    // Return only GS v 0 raster header + bitmap data. Do NOT include
+    // ESC @ (printer reset), trailing line-feeds or cut commands here —
+    // those must be controlled by the caller to avoid large gaps/cuts.
+    return new Uint8Array([
+      0x1D, 0x76, 0x30, 0x00,
+      bpr & 0xFF, (bpr >> 8) & 0xFF,
+      H & 0xFF,   (H  >> 8) & 0xFF,
+      ...raster,
+    ]);
+  };
+
+  const printReceiptBt = async (receipt: Receipt) => {
+    if (!btPrinterCharRef.current) {
+      alert('Printer not connected.\nOpen the 🖨️ Printer Setup tab in the sidebar.');
+      return;
+    }
+
+    // Auto-detect: if any item name or customer name has non-ASCII characters
+    // (Devanagari, symbols, etc.) use raster/bitmap printing — identical to how
+    // Zobaze and other Indian POS apps handle regional language printing.
+    // Pure-ASCII receipts stay on the fast text-mode path.
+    // New behavior: default to text-mode printing for the entire receipt and
+    // only rasterize (bitmap-print) specific strings that explicitly ask for
+    // bitmap rendering. This keeps prints fast and readable while allowing
+    // Devanagari glyphs to be rendered exactly where requested.
+
+    // Auto-detect Devanagari text for raster printing, or allow explicit markers.
+    const containsDevanagari = (s?: string) => {
+      if (!s) return false;
+      return /[\u0900-\u097F\uA8E0-\uA8FF]/.test(s);
+    };
+    const isBitmapMarker = (s?: string) => {
+      if (!s) return false;
+      const t = s.toLowerCase().replace(/\s+/g, ' ').trim();
+      return containsDevanagari(s)
+        || t.includes('[bitmap]')
+        || t.includes('bit map use and print devanagari name')
+        || t.includes('print devanagari as image');
+    };
+
+    // Render a single line of text into a canvas and return ESC/POS raster bytes.
+    const renderTextToCanvas = (text: string): Uint8Array => {
+      // Printable width in pixels for 80mm @203dpi — keep consistent with raster routine.
+      const PW = 576;
+      const padding = 12;
+      const fontFamily = '"Noto Sans Devanagari", sans-serif';
+      const fontSize = 36;
+
+      // Use a temporary context for measuring/wrapping
+      const measure = document.createElement('canvas');
+      const mctx = measure.getContext('2d')!;
+      mctx.font = `${fontSize}px ${fontFamily}`;
+
+      // Simple word-wrap: break on spaces, fall back to character-split for long words
+      const words = (text || ' ').split(/\s+/);
+      const lines: string[] = [];
+      let cur = '';
+      for (const w of words) {
+        const test = cur ? `${cur} ${w}` : w;
+        if (mctx.measureText(test).width + padding * 2 <= PW) {
+          cur = test;
+        } else {
+          if (cur) lines.push(cur);
+          // if single word too long, break it into smaller chunks
+          if (mctx.measureText(w).width + padding * 2 <= PW) {
+            cur = w;
+          } else {
+            let part = '';
+            for (const ch of w) {
+              const t = part + ch;
+              if (mctx.measureText(t).width + padding * 2 <= PW) part = t;
+              else { if (part) lines.push(part); part = ch; }
+            }
+            cur = part;
+          }
+        }
+      }
+      if (cur) lines.push(cur);
+
+      const lineHeight = fontSize + 10;
+      const CH = lines.length * lineHeight + padding * 2;
+      const canvas = document.createElement('canvas');
+      canvas.width = PW;
+      canvas.height = CH;
+      const ctx = canvas.getContext('2d')!;
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, PW, CH);
+      ctx.fillStyle = '#000000'; ctx.textBaseline = 'top';
+      ctx.font = `${fontSize}px ${fontFamily}`;
+
+      let y = padding;
+      for (const ln of lines) {
+        ctx.fillText(ln, padding, y);
+        y += lineHeight;
+      }
+
+      // canvasToEscPosRaster applies a luminance threshold; return raster bytes.
+      return canvasToEscPosRaster(canvas);
+    };
+
+    // Render an entire receipt row as a single bitmap: left column contains
+    // the (possibly multi-line) Devanagari name, right columns contain qty,
+    // rate and amount rendered in Latin numerals. This ensures the values
+    // appear beside the name on the printed receipt.
+    const renderItemRowToRaster = (item: any, index: number): Uint8Array => {
+      const PW = 576;
+      const padding = 6;
+      const Wcols = 40; const C1 = 18, C2 = 5, C3 = 8, C4 = 9;
+      const col1 = Math.floor(PW * C1 / Wcols);
+      const col2 = Math.floor(PW * C2 / Wcols);
+      const col3 = Math.floor(PW * C3 / Wcols);
+      const col4 = Math.floor(PW * C4 / Wcols);
+
+      const fontDevSize = 24;
+      const fontNumSize = 20;
+      const fontDev = `${fontDevSize}px "Noto Sans Devanagari", sans-serif`;
+      const fontNum = `bold ${fontNumSize}px "Segoe UI", sans-serif`;
+      const measure = document.createElement('canvas');
+      const mctx = measure.getContext('2d')!;
+      mctx.font = fontDev;
+
+      const name = `${index + 1}. ${item.name}`;
+      // wrap name within col1 - padding
+      const maxW = col1 - padding * 2;
+      const words = name.split(/\s+/);
+      const lines: string[] = [];
+      let cur = '';
+      for (const w of words) {
+        const test = cur ? `${cur} ${w}` : w;
+        if (mctx.measureText(test).width <= maxW) cur = test;
+        else { if (cur) lines.push(cur); cur = w; }
+      }
+      if (cur) lines.push(cur);
+
+      const lineHeight = fontDevSize + 8;
+      const CH = Math.max(lineHeight * lines.length, lineHeight) + padding * 2;
+      const canvas = document.createElement('canvas');
+      canvas.width = PW; canvas.height = CH;
+      const ctx = canvas.getContext('2d')!;
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, PW, CH);
+
+      // Draw name on left (top-aligned)
+      ctx.fillStyle = '#000000'; ctx.textBaseline = 'top'; ctx.textAlign = 'left';
+      ctx.font = fontDev;
+      let y = padding;
+      for (const ln of lines) { ctx.fillText(ln, padding, y); y += lineHeight; }
+
+      // Draw qty/rate/amt right-aligned within their columns, vertically
+      // centered across the name block so values line up with headers visually.
+      ctx.font = fontNum; ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'right';
+      // strengthen stroke for bold appearance on thermal printers
+      ctx.lineWidth = 1.8; ctx.strokeStyle = '#000';
+      const unit = item.cartUnit && item.cartUnit !== item.unit ? item.cartUnit : item.unit;
+      const qtyStr = `${item.qty}${unit}`;
+      const rateStr = (item.rate * (item.multiplier || 1)).toFixed(2);
+      const amtStr = item.total.toFixed(2);
+
+      // column starts
+      const col1Start = 0;
+      const col2Start = col1Start + col1;
+      const col3Start = col2Start + col2;
+      const col4Start = col3Start + col3;
+      const xQty = col2Start + col2 - padding;
+      const xRate = col3Start + col3 - padding;
+      const xAmt = Math.min(PW - padding, col4Start + col4 - padding);
+
+      // vertical center for numeric text
+      const innerH = CH - padding * 2;
+      const yNum = padding + Math.floor((innerH + fontNumSize) / 2) - 2; // small tweak
+
+      ctx.strokeText(qtyStr, xQty, yNum);
+      ctx.fillText(qtyStr, xQty, yNum);
+      ctx.strokeText(rateStr, xRate, yNum);
+      ctx.fillText(rateStr, xRate, yNum);
+      ctx.strokeText(amtStr, xAmt, yNum);
+      ctx.fillText(amtStr, xAmt, yNum);
+
+      return canvasToEscPosRaster(canvas);
+    };
+
+    // If no item or header explicitly requests bitmap printing, use text mode.
+    const markerExists = receipt.items.some(it => isBitmapMarker(it.name))
+      || isBitmapMarker(receipt.customerName || '');
+
+    if (!markerExists) {
+      try { await btSend(buildEscPos(receipt)); }
+      catch (err: any) { alert(`Print failed: ${err.message}`); }
+      return;
+    }
+
+    // Build ESC/POS bytes in text mode, but provide a rasterProvider that will
+    // rasterize only the marked strings.
+    try {
+      await document.fonts?.ready; // wait for Noto Sans to load if available
+    } catch (_) {}
+
+    const rasterProvider = (item: any, index: number) => {
+      const txt = item?.name || '';
+      if (!isBitmapMarker(txt)) return null;
+      // If text contains Devanagari, render the whole row as a bitmap so
+      // numeric columns print beside the name.
+      const out = renderItemRowToRaster(item, index ?? 0);
+      console.debug('[rasterProvider] rasterized row bytes:', out.length, { name: txt });
+      return out;
+    };
+
+    try {
+      await btSend(buildEscPos(receipt, rasterProvider));
+    } catch (err: any) {
+      alert(`Print failed: ${err.message}`);
+    }
+  };
+
   const cartTotal = cart.reduce((sum, item) => sum + item.total, 0);
 
   // Stock filtering — substring first, Fuse fuzzy fallback on miss
@@ -1533,13 +2019,23 @@ export default function App() {
           <button onClick={() => setSidebarOpen(false)} style={{ background: 'transparent', border: 'none', color: 'white', fontSize: '1.3rem', cursor: 'pointer', lineHeight: 1, padding: 4 }}>✕</button>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
-          {(['billing','inventory','reports','customers','receipts'] as const).map(tab => {
-            const labels: Record<string, string> = { billing: '📝 BILLING', inventory: '📦 INVENTORY', reports: '📊 REPORTS', customers: '👥 CUSTOMERS', receipts: '🧾 RECEIPTS' };
+          {(['billing','inventory','reports','customers','receipts','printer'] as const).map(tab => {
+            const labels: Record<string, string> = {
+              billing: '📝 BILLING', inventory: '📦 INVENTORY', reports: '📊 REPORTS',
+              customers: '👥 CUSTOMERS', receipts: '🧾 RECEIPTS', printer: '🖨️ PRINTER SETUP',
+            };
             return (
               <a key={tab} className={`nav-link ${activeTab === tab ? 'active' : ''}`}
                 onClick={() => { setActiveTab(tab); setSidebarOpen(false); }}
-                style={{ opacity: activeTab === tab ? 1 : 0.75 }}>
-                {labels[tab]}
+                style={{ opacity: activeTab === tab ? 1 : 0.75, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span>{labels[tab]}</span>
+                {tab === 'printer' && (
+                  <span style={{
+                    width: 9, height: 9, borderRadius: '50%', flexShrink: 0,
+                    background: btStatus === 'connected' ? '#4ade80' : btStatus === 'connecting' ? '#fbbf24' : '#6b7280',
+                    boxShadow: btStatus === 'connected' ? '0 0 6px #4ade80' : 'none',
+                  }} />
+                )}
               </a>
             );
           })}
@@ -2179,6 +2675,92 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {activeTab === 'printer' && (
+          <div>
+            <h2 style={{ fontWeight: 'bold', marginBottom: '1.2rem' }}>🖨️ Bluetooth Printer Setup</h2>
+
+            {/* Status card */}
+            <div className="card" style={{ padding: '20px', marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+                {/* Status dot + label */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{
+                    width: 18, height: 18, borderRadius: '50%', flexShrink: 0,
+                    background: btStatus === 'connected' ? '#22c55e' : btStatus === 'connecting' ? '#f59e0b' : btStatus === 'error' ? '#ef4444' : '#9ca3af',
+                    boxShadow: btStatus === 'connected' ? '0 0 10px #22c55e88' : btStatus === 'connecting' ? '0 0 8px #f59e0b88' : 'none',
+                    display: 'inline-block',
+                  }} />
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: '1rem', color: '#1c1917' }}>
+                      {btStatus === 'connected'  ? btDeviceName : btStatus === 'connecting' ? 'Connecting…' : btStatus === 'error' ? 'Connection Failed' : 'No Printer Connected'}
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: 1 }}>
+                      {btStatus === 'connected' ? 'Ready to print' : btStatus === 'connecting' ? 'Please wait…' : 'Tap Connect to pair your printer'}
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', gap: 8, marginLeft: 'auto', flexWrap: 'wrap' }}>
+                  {btStatus !== 'connected' ? (
+                    <button
+                      onClick={connectBtPrinter}
+                      disabled={btStatus === 'connecting'}
+                      style={{ background: btStatus === 'connecting' ? '#9ca3af' : '#0a3d62', color: 'white', border: 'none', borderRadius: 9, padding: '11px 22px', fontWeight: 700, fontSize: '0.95rem', cursor: btStatus === 'connecting' ? 'default' : 'pointer' }}
+                    >
+                      {btStatus === 'connecting' ? '⏳ Connecting…' : '🔗 Connect Printer'}
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => printReceiptBt({ receipt_no: 'TEST-001', date: new Date().toLocaleString(), customerName: 'Test Print', customerPhone: '', items: [{ id:'t1', name:'Sample Item', unit:'pcs', qty:1, rate:50, total:50, cartUnit:'pcs', multiplier:1 }], total: 50 } as Receipt)}
+                        style={{ background: '#16a34a', color: 'white', border: 'none', borderRadius: 9, padding: '11px 18px', fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer' }}
+                      >
+                        🧾 Test Print
+                      </button>
+                      <button
+                        onClick={disconnectBtPrinter}
+                        style={{ background: 'transparent', color: '#dc2626', border: '1.5px solid #dc2626', borderRadius: 9, padding: '11px 18px', fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer' }}
+                      >
+                        ✕ Disconnect
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* How to connect */}
+            <div className="card" style={{ padding: '18px 20px', marginBottom: 12 }}>
+              <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#0a3d62', marginBottom: 10 }}>📋 HOW TO CONNECT</div>
+              {[
+                'Turn on your PosBox / thermal printer.',
+                'Enable Bluetooth on your phone.',
+                'Tap "Connect Printer" above.',
+                'Your browser will show a device list — select your printer.',
+                'Status turns green. Done!',
+                'Every time you save a bill, tap 🖨️ Print in the receipt popup.',
+              ].map((step, i) => (
+                <div key={i} style={{ display: 'flex', gap: 10, marginBottom: 7, fontSize: '0.88rem', color: '#374151' }}>
+                  <span style={{ background: '#0a3d62', color: 'white', borderRadius: '50%', width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: '0.75rem', flexShrink: 0 }}>{i+1}</span>
+                  <span style={{ lineHeight: 1.5 }}>{step}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* Compatibility note */}
+            <div className="card" style={{ padding: '14px 18px', background: '#fefce8', border: '1px solid #fde68a' }}>
+              <div style={{ fontWeight: 700, fontSize: '0.82rem', color: '#92400e', marginBottom: 6 }}>⚠️ BROWSER COMPATIBILITY</div>
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: '0.82rem', color: '#78350f', lineHeight: 1.8 }}>
+                <li><b>Android Chrome</b> — ✅ Fully supported</li>
+                <li><b>Desktop Chrome / Edge</b> — ✅ Supported (enable Bluetooth)</li>
+                <li><b>iOS Safari / Firefox</b> — ❌ Web Bluetooth not supported</li>
+                <li>Make sure no other device is already connected to the printer.</li>
+                <li>If connection fails, turn the printer off and on again, then retry.</li>
+              </ul>
+            </div>
+          </div>
+        )}
       </div>
 
       {modalItem && (
@@ -2753,6 +3335,25 @@ export default function App() {
 
             {/* Share action buttons */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {/* Bluetooth print — primary if connected */}
+              <button
+                onClick={() => lastReceipt && printReceiptBt(lastReceipt)}
+                style={{
+                  width: '100%', padding: '14px',
+                  background: btStatus === 'connected' ? '#0a3d62' : '#e2e8f0',
+                  color: btStatus === 'connected' ? 'white' : '#94a3b8',
+                  border: btStatus === 'connected' ? 'none' : '1.5px dashed #cbd5e1',
+                  borderRadius: '10px', fontWeight: 'bold', fontSize: '1rem', cursor: btStatus === 'connected' ? 'pointer' : 'default',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                }}
+              >
+                <span style={{
+                  width: 9, height: 9, borderRadius: '50%',
+                  background: btStatus === 'connected' ? '#4ade80' : '#94a3b8',
+                  flexShrink: 0,
+                }} />
+                {btStatus === 'connected' ? `🖨️ Print via ${btDeviceName}` : '🖨️ BT Print (not connected — go to Printer Setup)'}
+              </button>
               <button
                 onClick={shareWhatsApp}
                 style={{ width: '100%', padding: '14px', background: '#25D366', color: 'white', border: 'none', borderRadius: '10px', fontWeight: 'bold', fontSize: '1rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
@@ -2770,7 +3371,7 @@ export default function App() {
                   onClick={() => { setReceiptShareOpen(false); setTimeout(() => window.print(), 300); }}
                   style={{ flex: 1, padding: '12px', background: '#333', color: 'white', border: 'none', borderRadius: '10px', fontWeight: 'bold', fontSize: '0.9rem', cursor: 'pointer' }}
                 >
-                  🖨️ Print
+                  🖨️ USB/WiFi Print
                 </button>
               </div>
               {'share' in navigator && (
