@@ -7,4 +7,19 @@ export default defineConfig({
   server: {
     hmr: true,
   },
+  build: {
+    // Increase the chunk warning limit to avoid CI/build failures on large bundles.
+    chunkSizeWarningLimit: 2000,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            if (id.includes('xlsx')) return 'vendor_xlsx';
+            if (id.includes('html2canvas')) return 'vendor_html2canvas';
+            return 'vendor';
+          }
+        }
+      }
+    }
+  },
 })

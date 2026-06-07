@@ -1484,64 +1484,7 @@ export default function App() {
         || t.includes('print devanagari as image');
     };
 
-    // Render a single line of text into a canvas and return ESC/POS raster bytes.
-    const renderTextToCanvas = (text: string): Uint8Array => {
-      // Printable width in pixels for 80mm @203dpi — keep consistent with raster routine.
-      const PW = 576;
-      const padding = 12;
-      const fontFamily = '"Noto Sans Devanagari", sans-serif';
-      const fontSize = 36;
-
-      // Use a temporary context for measuring/wrapping
-      const measure = document.createElement('canvas');
-      const mctx = measure.getContext('2d')!;
-      mctx.font = `${fontSize}px ${fontFamily}`;
-
-      // Simple word-wrap: break on spaces, fall back to character-split for long words
-      const words = (text || ' ').split(/\s+/);
-      const lines: string[] = [];
-      let cur = '';
-      for (const w of words) {
-        const test = cur ? `${cur} ${w}` : w;
-        if (mctx.measureText(test).width + padding * 2 <= PW) {
-          cur = test;
-        } else {
-          if (cur) lines.push(cur);
-          // if single word too long, break it into smaller chunks
-          if (mctx.measureText(w).width + padding * 2 <= PW) {
-            cur = w;
-          } else {
-            let part = '';
-            for (const ch of w) {
-              const t = part + ch;
-              if (mctx.measureText(t).width + padding * 2 <= PW) part = t;
-              else { if (part) lines.push(part); part = ch; }
-            }
-            cur = part;
-          }
-        }
-      }
-      if (cur) lines.push(cur);
-
-      const lineHeight = fontSize + 10;
-      const CH = lines.length * lineHeight + padding * 2;
-      const canvas = document.createElement('canvas');
-      canvas.width = PW;
-      canvas.height = CH;
-      const ctx = canvas.getContext('2d')!;
-      ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, PW, CH);
-      ctx.fillStyle = '#000000'; ctx.textBaseline = 'top';
-      ctx.font = `${fontSize}px ${fontFamily}`;
-
-      let y = padding;
-      for (const ln of lines) {
-        ctx.fillText(ln, padding, y);
-        y += lineHeight;
-      }
-
-      // canvasToEscPosRaster applies a luminance threshold; return raster bytes.
-      return canvasToEscPosRaster(canvas);
-    };
+    // (removed unused renderTextToCanvas helper; row rendering uses renderItemRowToRaster)
 
     // Render an entire receipt row as a single bitmap: left column contains
     // the (possibly multi-line) Devanagari name, right columns contain qty,
@@ -1559,7 +1502,7 @@ export default function App() {
       const fontDevSize = 24;
       const fontNumSize = 20;
       const fontDev = `${fontDevSize}px "Noto Sans Devanagari", sans-serif`;
-      const fontNum = `bold ${fontNumSize}px "Segoe UI", sans-serif`;
+      const fontNum = ` ${fontNumSize}px "Segoe UI", sans-serif`;
       const measure = document.createElement('canvas');
       const mctx = measure.getContext('2d')!;
       mctx.font = fontDev;
