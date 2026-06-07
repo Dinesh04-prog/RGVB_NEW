@@ -1376,9 +1376,6 @@ export default function App() {
       str(nameCell + pR(qtyStr, C2) + pR(rateStr, C3) + pR(amtStr, C4)); nl();
     }
 
-    // item count — right-aligned
-    const countStr = `${r.items.length} item${r.items.length !== 1 ? 's' : ''}`;
-    str(pL(countStr, W)); nl();
 
     // ── Total ────────────────────────────────────────────────
     str('='.repeat(W)); nl();
