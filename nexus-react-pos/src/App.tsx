@@ -1283,7 +1283,7 @@ export default function App() {
     console.debug('[btSend] finished');
   };
 
-  const buildEscPos = (r: Receipt, rasterProvider?: (item: any, index: number) => Uint8Array | null): Uint8Array => {
+  const buildEscPos = (r: Receipt, rasterProvider?: (item: any, index: number) => Uint8Array | null, logoRaster?: Uint8Array): Uint8Array => {
     // 80 mm paper — 40 printable chars per line at standard font (203 DPI).
     // Column layout matches the on-screen receipt: ITEM | QTY | RATE | AMT
     //   ITEM 18 chars (left) | QTY 5 (right) | RATE 8 (right) | AMT 9 (right) = 40
@@ -1321,6 +1321,7 @@ export default function App() {
 
     // ── Store header (centered, bold, double width+height) ──
     b(0x1B, 0x61, 0x01);  // align centre
+    if (logoRaster) { buf.push(...logoRaster); nl(); }
     b(0x1B, 0x45, 0x01);  // bold on
     b(0x1D, 0x21, 0x11);  // double width + height
     str('RAJENDRA GVB'); nl();
@@ -1467,6 +1468,24 @@ export default function App() {
     // bitmap rendering. This keeps prints fast and readable while allowing
     // Devanagari glyphs to be rendered exactly where requested.
 
+    // Pre-render shop logo for BLE receipt header
+    let logoRaster: Uint8Array | undefined;
+    try {
+      const logoImg = new Image();
+      logoImg.src = '/shop-logo.jpeg';
+      await new Promise<void>((resolve) => { logoImg.onload = () => resolve(); logoImg.onerror = () => resolve(); });
+      if (logoImg.naturalWidth > 0) {
+        const logoH = 104;
+        const logoW = Math.min(240, Math.round(logoImg.naturalWidth * logoH / logoImg.naturalHeight));
+        const logoCanvas = document.createElement('canvas');
+        logoCanvas.width = logoW; logoCanvas.height = logoH;
+        const lctx = logoCanvas.getContext('2d')!;
+        lctx.fillStyle = '#ffffff'; lctx.fillRect(0, 0, logoW, logoH);
+        lctx.drawImage(logoImg, 0, 0, logoW, logoH);
+        logoRaster = canvasToEscPosRaster(logoCanvas);
+      }
+    } catch (_) {}
+
     // Auto-detect Devanagari text for raster printing, or allow explicit markers.
     const containsDevanagari = (s?: string) => {
       if (!s) return false;
@@ -1568,7 +1587,7 @@ export default function App() {
       || isBitmapMarker(receipt.customerName || '');
 
     if (!markerExists) {
-      try { await btSend(buildEscPos(receipt)); }
+      try { await btSend(buildEscPos(receipt, undefined, logoRaster)); }
       catch (err: any) { alert(`Print failed: ${err.message}`); }
       return;
     }
@@ -1590,7 +1609,7 @@ export default function App() {
     };
 
     try {
-      await btSend(buildEscPos(receipt, rasterProvider));
+      await btSend(buildEscPos(receipt, rasterProvider, logoRaster));
     } catch (err: any) {
       alert(`Print failed: ${err.message}`);
     }
@@ -1921,7 +1940,8 @@ export default function App() {
                 line-height: 1.35;
             }
             #printReceiptArea * { visibility: visible !important; }
-            .rp-store-name { font-size: 14pt; font-weight: bold; text-align: center; letter-spacing: 1px; }
+            .rp-store-name { font-size: 14pt; font-weight: bold; text-align: center; letter-spacing: 1px; display: flex; align-items: center; justify-content: center; gap: 4px; }
+            .rp-logo { height: 14pt; width: auto; }
             .rp-sub { font-size: 8pt; text-align: center; }
             .rp-center { text-align: center; }
             .rp-meta { font-size: 8.5pt; margin: 1mm 0; }
@@ -2670,35 +2690,8 @@ export default function App() {
               </div>
             </div>
 
-            {/* How to connect */}
-            <div className="card" style={{ padding: '18px 20px', marginBottom: 12 }}>
-              <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#0a3d62', marginBottom: 10 }}>📋 HOW TO CONNECT</div>
-              {[
-                'Turn on your PosBox / thermal printer.',
-                'Enable Bluetooth on your phone.',
-                'Tap "Connect Printer" above.',
-                'Your browser will show a device list — select your printer.',
-                'Status turns green. Done!',
-                'Every time you save a bill, tap 🖨️ Print in the receipt popup.',
-              ].map((step, i) => (
-                <div key={i} style={{ display: 'flex', gap: 10, marginBottom: 7, fontSize: '0.88rem', color: '#374151' }}>
-                  <span style={{ background: '#0a3d62', color: 'white', borderRadius: '50%', width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: '0.75rem', flexShrink: 0 }}>{i+1}</span>
-                  <span style={{ lineHeight: 1.5 }}>{step}</span>
-                </div>
-              ))}
-            </div>
 
-            {/* Compatibility note */}
-            <div className="card" style={{ padding: '14px 18px', background: '#fefce8', border: '1px solid #fde68a' }}>
-              <div style={{ fontWeight: 700, fontSize: '0.82rem', color: '#92400e', marginBottom: 6 }}>⚠️ BROWSER COMPATIBILITY</div>
-              <ul style={{ margin: 0, paddingLeft: 18, fontSize: '0.82rem', color: '#78350f', lineHeight: 1.8 }}>
-                <li><b>Android Chrome</b> — ✅ Fully supported</li>
-                <li><b>Desktop Chrome / Edge</b> — ✅ Supported (enable Bluetooth)</li>
-                <li><b>iOS Safari / Firefox</b> — ❌ Web Bluetooth not supported</li>
-                <li>Make sure no other device is already connected to the printer.</li>
-                <li>If connection fails, turn the printer off and on again, then retry.</li>
-              </ul>
-            </div>
+
           </div>
         )}
       </div>
@@ -3237,7 +3230,10 @@ export default function App() {
 
             {/* Visible receipt card — mimics 80mm thermal output */}
             <div ref={receiptCardRef} style={{ background: '#fff', padding: '12px 14px', borderRadius: '8px', border: '1px solid #ddd', marginBottom: '12px', fontFamily: "'Courier New', Courier, monospace", fontSize: '11px', lineHeight: 1.4 }}>
-              <div style={{ fontWeight: 'bold', fontSize: '15px', textAlign: 'center', letterSpacing: 1 }}>RAJENDRA GVB</div>
+              <div style={{ fontWeight: 'bold', fontSize: '15px', textAlign: 'center', letterSpacing: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
+                <img src="/shop-logo.jpeg" alt="" style={{ height: '22px', width: 'auto' }} />
+                RAJENDRA GVB
+              </div>
               <div style={{ fontSize: '9px', textAlign: 'center', color: '#555', marginBottom: '6px' }}>Fresh Groceries &amp; More</div>
               <div style={{ borderTop: '2px solid #000', borderBottom: '1px dashed #aaa', padding: '5px 0', margin: '0 0 6px 0', fontSize: '10px' }}>
                 <div>Bill No : <b>{lastReceipt.receipt_no}</b></div>
@@ -3338,7 +3334,7 @@ export default function App() {
         {lastReceipt && (
           <>
             {/* Store header */}
-            <div className="rp-store-name">RAJENDRA GVB</div>
+            <div className="rp-store-name"><img src="/shop-logo.jpeg" className="rp-logo" alt="" />RAJENDRA GVB</div>
             <div className="rp-sub">Fresh Groceries &amp; More</div>
             <hr className="rp-divider-solid" />
 
