@@ -52,6 +52,95 @@ const getUnitMultiplier = (targetUnit: string, baseUnit: string) => {
   return 1;
 };
 
+// ── Mobile Bottom Navigation ──────────────────────────────────────────
+const MobileBottomNav: React.FC<{
+  activeTab: string;
+  setActiveTab: (t: string) => void;
+  cartCount: number;
+  heldCount: number;
+  btStatus: 'idle' | 'connecting' | 'connected' | 'error';
+}> = ({ activeTab, setActiveTab, cartCount, heldCount, btStatus }) => {
+  const tabs = [
+    { id: 'billing',   icon: '🧾', label: 'Billing'  },
+    { id: 'inventory', icon: '📦', label: 'Stock'    },
+    { id: 'reports',   icon: '📊', label: 'Reports'  },
+    { id: 'receipts',  icon: '🗒️', label: 'Bills'    },
+    { id: 'customers', icon: '👥', label: 'People'   },
+    { id: 'printer',   icon: '🖨️', label: 'Printer'  },
+  ];
+  return (
+    <div style={{
+      position: 'fixed', bottom: 0, left: 0, right: 0,
+      height: 66, background: '#fff',
+      borderTop: '1.5px solid #eaecf2',
+      display: 'flex', alignItems: 'center',
+      padding: '4px 2px 0', zIndex: 950,
+    }}>
+      {tabs.map(t => (
+        <div
+          key={t.id}
+          onClick={() => setActiveTab(t.id)}
+          style={{
+            flex: 1, display: 'flex', flexDirection: 'column',
+            alignItems: 'center', justifyContent: 'center',
+            gap: 2, cursor: 'pointer', padding: '4px 1px 6px',
+            borderRadius: 12, position: 'relative',
+            WebkitTapHighlightColor: 'transparent',
+          }}
+        >
+          {activeTab === t.id && (
+            <div style={{
+              position: 'absolute', top: 0, left: '50%',
+              transform: 'translateX(-50%)',
+              width: 22, height: 3,
+              background: '#0a3d62',
+              borderRadius: '0 0 3px 3px',
+            }} />
+          )}
+          <div style={{ fontSize: 19, lineHeight: 1, position: 'relative' }}>
+            {t.icon}
+            {t.id === 'printer' && (
+              <span style={{
+                position: 'absolute', top: -2, right: -4,
+                width: 7, height: 7, borderRadius: '50%',
+                background: btStatus === 'connected' ? '#22c55e' : btStatus === 'connecting' ? '#f59e0b' : '#9ca3af',
+                border: '1.5px solid #fff',
+              }} />
+            )}
+          </div>
+          <div style={{
+            fontSize: 9, fontWeight: activeTab === t.id ? 700 : 600,
+            color: activeTab === t.id ? '#0a3d62' : '#94a3b8',
+            lineHeight: 1,
+          }}>{t.label}</div>
+          {t.id === 'billing' && cartCount > 0 && (
+            <span style={{
+              position: 'absolute', top: 5, right: '12%',
+              background: '#0a3d62', color: '#fff',
+              fontSize: 8, fontWeight: 800,
+              borderRadius: 999, minWidth: 15, height: 15,
+              display: 'flex', alignItems: 'center',
+              justifyContent: 'center', padding: '0 3px',
+              border: '1.5px solid #f0f2f7',
+            }}>{cartCount}</span>
+          )}
+          {t.id === 'billing' && heldCount > 0 && cartCount === 0 && (
+            <span style={{
+              position: 'absolute', top: 5, right: '12%',
+              background: '#f59e0b', color: '#fff',
+              fontSize: 8, fontWeight: 800,
+              borderRadius: 999, minWidth: 15, height: 15,
+              display: 'flex', alignItems: 'center',
+              justifyContent: 'center', padding: '0 3px',
+              border: '1.5px solid #f0f2f7',
+            }}>{heldCount}</span>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+};
+
 export default function App() {
   const { user, logout } = useAuth();
   const [activeTab, setActiveTab] = useState("billing");
@@ -1859,6 +1948,8 @@ export default function App() {
 
         .mobile-cart-card { display: none; }
         .desktop-cart-table { display: block; }
+        .mobile-topbar { display: none; }
+        .mobile-bottom-nav { display: none; }
 
         .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; justify-content: center; align-items: center; z-index: 3000; padding: 16px; }
         .modal-content { background: white; padding: 20px; border-radius: 15px; width: 100%; max-width: 400px; max-height: 92vh; overflow-y: auto; }
@@ -1869,50 +1960,133 @@ export default function App() {
         .reports-profit { font-size: 4rem; }
 
         @media (max-width: 992px) {
-            /* Sidebar hidden off-screen by default; slides in when .open */
-            .sidebar { transform: translateX(-250px); }
-            .sidebar.open { transform: translateX(0); }
 
-            /* Hamburger button visible on mobile */
-            .hamburger-btn { display: flex; }
+          /* ── Hide hamburger + sidebar completely on mobile ── */
+          .sidebar           { display: none !important; }
+          .hamburger-btn     { display: none !important; }
+          .sidebar-overlay   { display: none !important; }
 
-            /* Main content: full width, breathing room below hamburger */
-            .main-content { margin-left: 0; width: 100%; padding: 62px 12px 28px; }
+          /* ── Show mobile-specific elements ── */
+          .mobile-topbar     { display: flex !important; }
+          .mobile-bottom-nav { display: block !important; }
 
-            /* Billing header */
-            .billing-header { margin-bottom: 0.75rem; }
-            .billing-header h2 { font-size: 1rem; }
+          /* ── Main content: full width, top + bottom padding for bars ── */
+          .main-content {
+            margin-left: 0 !important;
+            padding: 0 0 72px !important;
+            width: 100%;
+          }
 
-            /* Action buttons — show only the icon on mobile, hide label text */
-            .billing-action-btn .btn-text { display: none; }
-            .billing-action-btn { padding: 10px 12px !important; }
-            .customer-btn { font-size: 0.78rem; padding: 10px 12px !important; max-width: unset; }
+          /* ── Fixed mobile top bar ── */
+          .mobile-topbar {
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            height: 54px;
+            background: #0a3d62;
+            align-items: center;
+            padding: 0 10px 0 16px;
+            gap: 4px;
+            z-index: 900;
+            box-shadow: 0 2px 8px rgba(0,0,0,.2);
+          }
+          .mobile-topbar-title {
+            flex: 1;
+            color: #fff;
+            font-size: 17px;
+            font-weight: 700;
+          }
+          .mobile-topbar-sub {
+            color: rgba(255,255,255,.55);
+            font-size: 11px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 190px;
+          }
 
-            /* Search row */
-            .search-inner-row { gap: 6px; }
-            #itemNameSearch { height: 46px; font-size: 0.95rem; }
-            .scan-btn { height: 46px; font-size: 1.2rem; padding: 6px 8px; }
-            .ime-btn { height: 46px; min-width: 42px; padding: 0 8px; font-size: 0.85rem; }
-            .mic-btn { height: 46px; padding: 0 12px; font-size: 0.85rem; }
-            .suggestions-container { top: 52px; }
-            /* Larger tap targets in suggestion list */
-            .suggestion-item { padding: 13px 12px; min-height: 48px; }
+          /* ── Push content down below fixed top bar ── */
+          .billing-header { margin-top: 54px; }
 
-            /* Total bar */
-            .total-bar { border-radius: 10px; padding: 12px 14px; }
-            .total-bar h3 { font-size: 1.05rem; }
-            .checkout-btn { padding: 11px 20px; font-size: 0.95rem; font-weight: 900; border-radius: 9px; }
+          /* ── Hide desktop billing header actions text, show icons only ── */
+          .billing-header h2    { display: none; }
+          .billing-header       { margin-bottom: 0; padding: 8px 0 0; }
+          .billing-action-btn .btn-text { display: none; }
+          .billing-action-btn   { padding: 10px 11px !important; font-size: 1.1rem !important; }
+          .customer-btn         { max-width: unset; font-size: 0.8rem; padding: 10px 11px !important; }
 
-            .mobile-cart-card { display: block; }
-            .desktop-cart-table { display: none; }
+          /* ── Hide the billing-header action row entirely (moved to topbar) ── */
+          .billing-header > div:last-child { display: none !important; }
 
-            /* Kirana inventory columns — narrower so they fit on 360 px screens */
-            .kirana-vals { grid-template-columns: 58px 62px 52px; }
-            .kirana-col-header { grid-template-columns: 58px 62px 52px; }
+          /* ── Search bar ── */
+          .search-container     { margin-top: 4px; }
+          .search-inner-row     { gap: 6px; }
+          #itemNameSearch       { height: 48px; font-size: 0.95rem; border-radius: 14px; }
+          .scan-btn             { height: 48px; width: 48px; border-radius: 14px; font-size: 1.2rem; padding: 0; justify-content: center; }
+          .ime-btn              { height: 48px; min-width: 48px; padding: 0; border-radius: 14px; font-size: 0.9rem; }
+          .mic-btn              { height: 48px; padding: 0 14px; border-radius: 14px; font-size: 0.9rem; }
+          .suggestions-container { top: 54px; border-radius: 16px; box-shadow: 0 8px 28px rgba(0,0,0,.14); }
+          .suggestion-item      { padding: 13px 14px; min-height: 54px; }
 
-            .reports-profit { font-size: 2.5rem; }
+          /* ── Total bar ── */
+          .total-bar {
+            border-radius: 0 !important;
+            padding: 12px 16px !important;
+            background: #18243a !important;
+          }
+          .total-bar h3 { font-size: 1.2rem !important; font-weight: 900; }
+          .checkout-btn { padding: 13px 20px !important; font-size: 0.95rem !important; border-radius: 12px !important; }
 
-            .modal-overlay { padding: 10px; }
+          /* ── Desktop table hidden, mobile cards shown ── */
+          .mobile-cart-card   { display: block; }
+          .desktop-cart-table { display: none; }
+
+          /* ── Mobile cart card redesign ── */
+          .mobile-cart-card .card {
+            border-radius: 18px !important;
+            padding: 14px !important;
+            margin-bottom: 10px !important;
+            border: 1.5px solid #eceff5 !important;
+            box-shadow: 0 2px 10px rgba(10,30,60,.07) !important;
+          }
+
+          /* ── Inventory cards ── */
+          .kirana-vals        { grid-template-columns: 60px 65px 54px; }
+          .kirana-col-header  { grid-template-columns: 60px 65px 54px; }
+          .kirana-card        { border-radius: 16px; padding: 10px 12px; }
+
+          /* ── Modals as bottom sheets ── */
+          .modal-overlay {
+            padding: 0 !important;
+            align-items: flex-end !important;
+          }
+          .modal-content {
+            border-radius: 26px 26px 0 0 !important;
+            max-width: 100% !important;
+            width: 100% !important;
+            padding: 8px 20px 32px !important;
+            max-height: 90vh !important;
+            animation: slideUpSheet .22s ease;
+          }
+          .modal-content::before {
+            content: '';
+            display: block;
+            width: 36px; height: 4px;
+            background: #dde4ed;
+            border-radius: 2px;
+            margin: 10px auto 16px;
+          }
+
+          /* ── Bigger modal inputs ── */
+          .modal-input  { font-size: 1.6rem !important; padding: 14px !important; border-radius: 14px !important; }
+          .modal-btn    { padding: 17px !important; font-size: 1rem !important; border-radius: 14px !important; }
+
+          /* ── Reports ── */
+          .reports-profit { font-size: 2.8rem !important; }
+
+          @keyframes slideUpSheet {
+            from { transform: translateY(60px); opacity: 0; }
+            to   { transform: translateY(0);    opacity: 1; }
+          }
         }
 
         .kirana-card { background: white; border-radius: 12px; border: 1px solid #E7E5E4; box-shadow: 0 2px 8px rgba(0,0,0,0.04); margin-bottom: 8px; display: flex; align-items: center; padding: 10px 14px; gap: 10px; cursor: pointer; }
@@ -1961,6 +2135,10 @@ export default function App() {
             @page { size: 80mm auto; margin: 0; }
         }
         @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+        @keyframes slideUpSheet {
+          from { transform: translateY(60px); opacity: 0; }
+          to   { transform: translateY(0);    opacity: 1; }
+        }
       `}} />
 
       {/* Hamburger button — mobile only */}
@@ -1970,6 +2148,44 @@ export default function App() {
 
       {/* Backdrop — closes sidebar when tapped outside */}
       <div className={`sidebar-overlay${sidebarOpen ? ' open' : ''}`} onClick={() => setSidebarOpen(false)} />
+
+      {/* Mobile top bar — fixed header on small screens (CSS hides it on desktop) */}
+      <div className="mobile-topbar">
+        <span className="mobile-topbar-title">
+          {activeTab === 'billing'   && 'Point of Sale'}
+          {activeTab === 'inventory' && 'Inventory'}
+          {activeTab === 'reports'   && 'Reports'}
+          {activeTab === 'receipts'  && 'Receipts'}
+          {activeTab === 'customers' && 'Customers'}
+          {activeTab === 'printer'   && 'Printer Setup'}
+        </span>
+        {activeTab === 'billing' && (
+          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+            <button
+              onClick={holdBill}
+              disabled={cart.length === 0}
+              style={{ background: cart.length === 0 ? 'rgba(255,255,255,0.18)' : '#f59e0b', color: 'white', border: 'none', padding: '8px 10px', borderRadius: 8, fontWeight: 700, cursor: cart.length === 0 ? 'not-allowed' : 'pointer', fontSize: '0.9rem', opacity: cart.length === 0 ? 0.55 : 1 }}
+            >⏸</button>
+            {heldBills.length > 0 && (
+              <button
+                onClick={() => setShowHeldBills(true)}
+                style={{ background: '#6366f1', color: 'white', border: 'none', padding: '8px 10px', borderRadius: 8, fontWeight: 700, cursor: 'pointer', fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: 3 }}
+              >
+                ▶ <span style={{ background: '#ef4444', color: 'white', borderRadius: '999px', fontSize: '0.65rem', padding: '1px 5px', fontWeight: 900 }}>{heldBills.length}</span>
+              </button>
+            )}
+            <button
+              onClick={() => setIsCustomerModalOpen(true)}
+              style={{ background: customerName ? '#e0f2fe' : 'rgba(255,255,255,0.15)', color: customerName ? '#0a3d62' : 'white', border: customerName ? '1.5px solid #0d6efd' : '1.5px solid rgba(255,255,255,0.3)', padding: '8px 10px', borderRadius: 8, fontWeight: 700, cursor: 'pointer', fontSize: '0.9rem' }}
+            >👤</button>
+            <button
+              onClick={sendToOwner}
+              disabled={cart.length === 0 || reviewStatus === 'pending'}
+              style={{ background: cart.length === 0 || reviewStatus === 'pending' ? 'rgba(255,255,255,0.18)' : '#25D366', color: 'white', border: 'none', padding: '8px 10px', borderRadius: 8, fontWeight: 700, cursor: cart.length === 0 || reviewStatus === 'pending' ? 'not-allowed' : 'pointer', fontSize: '0.9rem', opacity: cart.length === 0 || reviewStatus === 'pending' ? 0.55 : 1 }}
+            >📤</button>
+          </div>
+        )}
+      </div>
 
       {/* Sidebar */}
       <div className={`sidebar${sidebarOpen ? ' open' : ''}`}>
@@ -2247,21 +2463,26 @@ export default function App() {
             {/* Mobile: Card view */}
             <div className="mobile-cart-card">
               {cart.map((c, i) => (
-                <div key={i} className="card" style={{ padding: '14px', marginBottom: '8px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+                <div key={i} className="card" style={{ padding: '14px', marginBottom: '10px', borderRadius: 18, border: '1.5px solid #eceff5' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
                     <div style={{ flex: 1, cursor: 'pointer', minWidth: 0 }} onClick={() => editCartItem(i)}>
-                      <div style={{ fontWeight: 'bold', fontSize: '1rem', color: '#0a3d62', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {c.name.toUpperCase()} <small style={{ color: '#6c757d', fontWeight: 'normal' }}>({c.unit})</small>
+                      <div style={{ fontWeight: 700, fontSize: '1rem', color: '#1a2535', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontFamily: '"Noto Sans Devanagari", sans-serif' }}>
+                        {c.name.toUpperCase()}
+                        <small style={{ color: '#94a3b8', fontWeight: 400, marginLeft: 5 }}>({c.unit})</small>
                       </div>
-                      <div style={{ display: 'flex', gap: '12px', marginTop: '5px', fontSize: '0.88rem', color: '#555', flexWrap: 'wrap' }}>
-                        <span>Qty: <b>{c.qty}{c.cartUnit && c.cartUnit !== c.unit ? ` ${c.cartUnit}` : ""}</b></span>
-                        <span>Rate: <b>₹{(c.rate * (c.multiplier || 1)).toFixed(2)}</b></span>
+                      <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                        <span style={{ background: '#f3f6fa', border: '1px solid #e5eaf3', borderRadius: 8, padding: '4px 10px', fontSize: '0.78rem', color: '#455060', fontWeight: 500 }}>
+                          ×{c.qty} {c.cartUnit && c.cartUnit !== c.unit ? c.cartUnit : c.unit}
+                        </span>
+                        <span style={{ background: '#f3f6fa', border: '1px solid #e5eaf3', borderRadius: 8, padding: '4px 10px', fontSize: '0.78rem', color: '#455060', fontWeight: 500 }}>
+                          ₹{(c.rate * (c.multiplier || 1)).toFixed(2)}/{c.unit}
+                        </span>
                       </div>
-                      <div style={{ fontSize: '0.7rem', color: '#9ca3af', marginTop: 3 }}>✏ tap to edit</div>
+                      <div style={{ fontSize: '0.68rem', color: '#c5ced8', marginTop: 4 }}>✏ tap to edit</div>
                     </div>
                     <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                      <div style={{ fontWeight: 'bold', color: '#0d6efd', fontSize: '1.15rem', marginBottom: 6 }}>₹{c.total.toFixed(2)}</div>
-                      <button className="btn-action danger" onClick={() => removeCartItem(i)} style={{ padding: '8px 14px', fontSize: '0.9rem', borderRadius: 6 }}>✕</button>
+                      <div style={{ fontWeight: 800, color: '#0a3d62', fontSize: '1.2rem', marginBottom: 8, lineHeight: 1 }}>₹{c.total.toFixed(2)}</div>
+                      <button className="btn-action danger" onClick={() => removeCartItem(i)} style={{ padding: '8px 14px', fontSize: '0.9rem', borderRadius: 8 }}>✕</button>
                     </div>
                   </div>
                 </div>
@@ -2272,7 +2493,7 @@ export default function App() {
 
         {activeTab === 'inventory' && (
           <div>
-            <h2 style={{ fontWeight: 'bold', marginBottom: '1rem' }}>Inventory</h2>
+            <h2 style={{ fontWeight: 'bold', marginBottom: '1rem', marginTop: window.innerWidth < 992 ? 54 : 0 }}>Inventory</h2>
             <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
               <div style={{ display: 'flex', alignItems: 'flex-end', gap: '10px', flexWrap: 'wrap' }}>
                 <div style={{ flex: 1, minWidth: '200px' }}>
@@ -2391,7 +2612,7 @@ export default function App() {
 
         {activeTab === 'customers' && (
           <div>
-            <h2 style={{ fontWeight: 'bold', marginBottom: '1rem' }}>Customer Directory</h2>
+            <h2 style={{ fontWeight: 'bold', marginBottom: '1rem', marginTop: window.innerWidth < 992 ? 54 : 0 }}>Customer Directory</h2>
             <div className="card">
               <div style={{ maxHeight: '70vh', overflowY: 'auto' }}>
                 {Array.from(new Set(allSales.filter(s => s.customerPhone || s.customerName).map(s => s.customerPhone || s.customerName))).map(custKey => {
@@ -2428,7 +2649,7 @@ export default function App() {
 
         {activeTab === 'receipts' && (
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', flexWrap: 'wrap', gap: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', flexWrap: 'wrap', gap: '8px', marginTop: window.innerWidth < 992 ? 54 : 0 }}>
               {viewingReceipt ? (
                 <button onClick={() => setViewingReceipt(null)} style={{ background: 'transparent', border: '1px solid #ccc', borderRadius: '8px', padding: '6px 14px', cursor: 'pointer', fontWeight: 'bold', color: '#0a3d62', fontSize: '0.9rem' }}>
                   ← Back
@@ -2601,7 +2822,7 @@ export default function App() {
 
         {activeTab === 'reports' && (
           <div style={{ textAlign: 'center' }}>
-            <h2 style={{ fontWeight: 'bold', marginBottom: '1rem' }}>Reports</h2>
+            <h2 style={{ fontWeight: 'bold', marginBottom: '1rem', marginTop: window.innerWidth < 992 ? 54 : 0 }}>Reports</h2>
             <div className="card" style={{ padding: '3rem' }}>
               <h6 style={{ color: '#6c757d', fontSize: '0.875rem', fontWeight: 'bold' }}>TOTAL NET PROFIT (OFFLINE SALES)</h6>
               <h1 className="reports-profit" style={{ color: '#198754', fontWeight: 'bold', margin: '1rem 0' }}>₹{totalProfit.toFixed(2)}</h1>
@@ -2638,7 +2859,7 @@ export default function App() {
 
         {activeTab === 'printer' && (
           <div>
-            <h2 style={{ fontWeight: 'bold', marginBottom: '1.2rem' }}>🖨️ Bluetooth Printer Setup</h2>
+            <h2 style={{ fontWeight: 'bold', marginBottom: '1.2rem', marginTop: window.innerWidth < 992 ? 54 : 0 }}>🖨️ Bluetooth Printer Setup</h2>
 
             {/* Status card */}
             <div className="card" style={{ padding: '20px', marginBottom: 16 }}>
@@ -3328,6 +3549,17 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Mobile bottom navigation — hidden on desktop via CSS */}
+      <div className="mobile-bottom-nav">
+        <MobileBottomNav
+          activeTab={activeTab}
+          setActiveTab={(t) => { setActiveTab(t); setSidebarOpen(false); }}
+          cartCount={cart.length}
+          heldCount={heldBills.length}
+          btStatus={btStatus}
+        />
+      </div>
 
       {/* Hidden Print Wrapper — optimised for 80mm thermal (PosBox / similar) */}
       <div id="printReceiptArea">
