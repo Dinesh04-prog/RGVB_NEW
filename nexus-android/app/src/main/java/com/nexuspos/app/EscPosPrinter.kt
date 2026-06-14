@@ -23,13 +23,13 @@ object EscPosPrinter {
 
     // Fixed right-edge X for each numeric column (pixels on 576px paper)
     private const val MARGIN_PX  = 4f
-    private const val COL_QTY    = 336f   // Qty right edge  (name ends at ~214px, gap ≥ 47px)
+    private const val COL_QTY    = 350f   // Qty right edge
     private const val COL_RATE   = 444f   // Rate right edge (full bill only)
-    private const val COL_AMT    = PAPER_W - MARGIN_PX   // 572f, Amt right edge
+    private const val COL_AMT    = 555f   // Amt right edge
     private const val NAME_MAX_W = 210f   // max px width for name text (4→214px)
 
     // Short bill has no Rate column — Qty shifts right to fill the space
-    private const val SB_COL_QTY = 400f
+    private const val SB_COL_QTY = 415f
 
     // ── ESC/POS commands ──────────────────────────────────────────────────────
     private val INIT        = cmd(0x1B, 0x40)
@@ -124,7 +124,7 @@ object EscPosPrinter {
                 BitmapFactory.decodeStream(it)
             } ?: return null
 
-            val logoW = 180
+            val logoW = 90
             val logoH = (raw.height.toFloat() * logoW / raw.width).toInt()
             val scaled = Bitmap.createScaledBitmap(raw, logoW, logoH, true)
             raw.recycle()
