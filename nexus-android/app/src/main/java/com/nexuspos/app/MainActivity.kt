@@ -45,13 +45,14 @@ class MainActivity : AppCompatActivity() {
         with(webView.settings) {
             javaScriptEnabled = true
             domStorageEnabled = true
-            allowFileAccess = false          // not needed; assets served via loader
+            allowFileAccess = false
             allowContentAccess = false
             databaseEnabled = true
             mediaPlaybackRequiresUserGesture = false
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             cacheMode = WebSettings.LOAD_DEFAULT
-            userAgentString = userAgentString.replace("wv", "")  // remove "wv" so some OAuth flows don't block
+            // Use a real Chrome Mobile UA — Google OAuth blocks requests from WebView UA strings
+            userAgentString = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.82 Mobile Safari/537.36"
         }
 
         webView.addJavascriptInterface(AndroidBtBridge(this), "AndroidBT")
