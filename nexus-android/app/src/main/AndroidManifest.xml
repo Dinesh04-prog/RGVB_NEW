@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Internet for Firebase, Google OAuth, and asset loading -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <!-- Classic Bluetooth (API ≤ 30) -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />

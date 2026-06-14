@@ -3,8 +3,12 @@ package com.nexuspos.app
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Message
+import android.util.Log
+import android.view.ViewGroup
 import android.webkit.*
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -19,7 +23,15 @@ class MainActivity : AppCompatActivity() {
     lateinit var btManager: BluetoothPrintManager
 
     companion object {
-        private const val BT_PERMISSION_REQUEST = 1001
+        private const val TAG = "NexusPOS"
+        private const val PERMISSION_REQUEST = 1001
+        // Domains that belong to our app — navigate inside WebView
+        private val APP_HOSTS = setOf("appassets.androidplatform.net")
+        // Domains that belong to Google OAuth — open in a popup WebView, not externally
+        private val GOOGLE_HOSTS = setOf(
+            "accounts.google.com", "oauth2.googleapis.com",
+            "apis.google.com", "content.googleapis.com"
+        )
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -31,13 +43,12 @@ class MainActivity : AppCompatActivity() {
         webView = findViewById(R.id.webView)
 
         setupWebView()
-        requestBluetoothPermissions()
+        requestAllPermissions()
+        webView.loadUrl("https://appassets.androidplatform.net/index.html")
     }
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun setupWebView() {
-        // Serve bundled assets at https://appassets.androidplatform.net/
-        // This gives a proper HTTPS origin so Firebase, OAuth, and IndexedDB all work.
         val assetLoader = WebViewAssetLoader.Builder()
             .addPathHandler("/", WebViewAssetLoader.AssetsPathHandler(this))
             .build()
@@ -51,58 +62,127 @@ class MainActivity : AppCompatActivity() {
             mediaPlaybackRequiresUserGesture = false
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             cacheMode = WebSettings.LOAD_DEFAULT
-            // Use a real Chrome Mobile UA — Google OAuth blocks requests from WebView UA strings
+            setSupportMultipleWindows(true)   // required for onCreateWindow
+            javaScriptCanOpenWindowsAutomatically = true
+            // Full Chrome Mobile UA — prevents Google from blocking OAuth in WebView
             userAgentString = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.82 Mobile Safari/537.36"
         }
 
         webView.addJavascriptInterface(AndroidBtBridge(this), "AndroidBT")
 
         webView.webViewClient = object : WebViewClientCompat() {
+
             override fun shouldInterceptRequest(
                 view: WebView, request: WebResourceRequest
             ): WebResourceResponse? = assetLoader.shouldInterceptRequest(request.url)
 
+            override fun shouldOverrideUrlLoading(
+                view: WebView, request: WebResourceRequest
+            ): Boolean {
+                val host = request.url.host ?: return false
+                // App URLs — load inside WebView normally
+                if (APP_HOSTS.any { host.endsWith(it) }) return false
+                // Google OAuth hosts — let the popup WebView handle these (not override)
+                if (GOOGLE_HOSTS.any { host.endsWith(it) }) return false
+                // Any other external URL — prevent navigation (keep user in app)
+                Log.w(TAG, "Blocked external navigation to: ${request.url}")
+                return true
+            }
+
             override fun onPageFinished(view: WebView?, url: String?) {
                 injectBluetoothBridge()
+            }
+
+            override fun onReceivedError(
+                view: WebView, request: WebResourceRequest, error: WebResourceError
+            ) {
+                Log.e(TAG, "WebView error: ${error.description} on ${request.url}")
             }
         }
 
         webView.webChromeClient = object : WebChromeClient() {
+
+            // Bridge JS console messages to Android logcat
+            override fun onConsoleMessage(msg: ConsoleMessage): Boolean {
+                val level = when (msg.messageLevel()) {
+                    ConsoleMessage.MessageLevel.ERROR -> Log.ERROR
+                    ConsoleMessage.MessageLevel.WARNING -> Log.WARN
+                    else -> Log.DEBUG
+                }
+                Log.println(level, TAG, "[JS] ${msg.message()} — ${msg.sourceId()}:${msg.lineNumber()}")
+                return true
+            }
+
+            // Handle popups opened by Google OAuth (window.open)
+            override fun onCreateWindow(
+                view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message?
+            ): Boolean {
+                val popupWebView = WebView(this@MainActivity)
+                popupWebView.settings.javaScriptEnabled = true
+                popupWebView.settings.domStorageEnabled = true
+                popupWebView.settings.userAgentString = webView.settings.userAgentString
+
+                // Add popup WebView on top of the main view
+                val container = webView.parent as ViewGroup
+                val params = ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+                container.addView(popupWebView, params)
+
+                popupWebView.webViewClient = object : WebViewClient() {
+                    override fun shouldOverrideUrlLoading(
+                        view: WebView, request: WebResourceRequest
+                    ): Boolean {
+                        val host = request.url.host ?: return false
+                        // When OAuth redirects back to our app, close popup and load in main WebView
+                        if (APP_HOSTS.any { host.endsWith(it) }) {
+                            container.removeView(popupWebView)
+                            webView.loadUrl(request.url.toString())
+                            return true
+                        }
+                        return false
+                    }
+                }
+
+                popupWebView.webChromeClient = object : WebChromeClient() {
+                    override fun onCloseWindow(window: WebView?) {
+                        container.removeView(popupWebView)
+                    }
+                }
+
+                // Wire the popup's transport to the new WebView
+                val transport = resultMsg?.obj as? WebView.WebViewTransport
+                transport?.webView = popupWebView
+                resultMsg?.sendToTarget()
+                return true
+            }
+
+            // Grant camera / microphone to web app automatically (already requested at OS level)
             override fun onPermissionRequest(request: PermissionRequest?) {
                 request?.grant(request.resources)
             }
-        }
 
-        webView.loadUrl("https://appassets.androidplatform.net/index.html")
+            // Geolocation prompt (not needed but prevents silent failures)
+            override fun onGeolocationPermissionsShowPrompt(
+                origin: String?, callback: GeolocationPermissions.Callback?
+            ) {
+                callback?.invoke(origin, false, false)
+            }
+        }
     }
 
     private fun injectBluetoothBridge() {
-        // Language: injected into every page load.
-        // Replaces navigator.bluetooth with a fake implementation that routes all
-        // BLE calls through AndroidBT JavascriptInterface → native Android BT socket.
-        // The web app's own buildEscPos() still runs in JS; we only intercept the send.
         val js = """
 (function() {
   if (window.__nexusBtInjected) return;
   window.__nexusBtInjected = true;
 
-  // Pending promise resolvers keyed by operation name
   var _res = {}, _rej = {};
+  function pending(key, resolve, reject) { _res[key] = resolve; _rej[key] = reject; }
+  function resolve(key, value) { if (_res[key]) { _res[key](value); delete _res[key]; delete _rej[key]; } }
+  function reject(key, msg)    { if (_rej[key]) { _rej[key](new Error(msg)); delete _res[key]; delete _rej[key]; } }
 
-  function pending(key, resolve, reject) {
-    _res[key] = resolve;
-    _rej[key] = reject;
-  }
-
-  function resolve(key, value) {
-    if (_res[key]) { _res[key](value); delete _res[key]; delete _rej[key]; }
-  }
-
-  function reject(key, msg) {
-    if (_rej[key]) { _rej[key](new Error(msg)); delete _res[key]; delete _rej[key]; }
-  }
-
-  // --- Fake characteristic ---
   function makeFakeChar() {
     return {
       properties: { writeWithoutResponse: true },
@@ -117,28 +197,19 @@ class MainActivity : AppCompatActivity() {
     };
   }
 
-  // --- Fake GATT server ---
   function makeFakeServer() {
     return {
       getPrimaryService: function(uuid) {
-        return Promise.resolve({
-          getCharacteristic: function(chrUuid) {
-            return Promise.resolve(makeFakeChar());
-          }
-        });
+        return Promise.resolve({ getCharacteristic: function() { return Promise.resolve(makeFakeChar()); } });
       }
     };
   }
 
-  // --- Fake device ---
   function makeFakeDevice(name, address) {
     var _disconnectHandler = null;
-    window.__btDisconnectHandler = function() {
-      if (_disconnectHandler) _disconnectHandler();
-    };
+    window.__btDisconnectHandler = function() { if (_disconnectHandler) _disconnectHandler(); };
     return {
-      name: name,
-      id: address,
+      name: name, id: address,
       gatt: {
         connect: function() {
           return new Promise(function(res, rej) {
@@ -154,7 +225,6 @@ class MainActivity : AppCompatActivity() {
     };
   }
 
-  // --- navigator.bluetooth replacement ---
   Object.defineProperty(navigator, 'bluetooth', {
     configurable: true,
     get: function() {
@@ -169,39 +239,37 @@ class MainActivity : AppCompatActivity() {
     }
   });
 
-  // --- Callbacks called by Android via evaluateJavascript ---
   window.onBtDeviceSelected   = function(name, address) { resolve('requestDevice', makeFakeDevice(name, address)); };
   window.onBtDeviceCancelled  = function()              { reject('requestDevice', 'NotFoundError: cancelled'); };
   window.onBtConnected        = function()              { resolve('gattConnect'); };
   window.onBtConnectFailed    = function(msg)           { reject('gattConnect', msg); };
-  window.onBtDisconnected     = function() {
-    if (window.__btDisconnectHandler) window.__btDisconnectHandler();
-  };
+  window.onBtDisconnected     = function()              { if (window.__btDisconnectHandler) window.__btDisconnectHandler(); };
 
-  console.log('[NexusPOS] Android BT bridge injected');
+  console.log('[NexusPOS] Android BT bridge ready');
 })();
         """.trimIndent()
-
         webView.evaluateJavascript("javascript:$js", null)
     }
 
-    private fun requestBluetoothPermissions() {
-        val needed = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN)
+    private fun requestAllPermissions() {
+        val needed = mutableListOf(
+            Manifest.permission.CAMERA,
+            Manifest.permission.RECORD_AUDIO
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            needed += Manifest.permission.BLUETOOTH_CONNECT
+            needed += Manifest.permission.BLUETOOTH_SCAN
         } else {
-            arrayOf(
-                Manifest.permission.BLUETOOTH,
-                Manifest.permission.BLUETOOTH_ADMIN,
-                Manifest.permission.ACCESS_FINE_LOCATION
-            )
+            needed += Manifest.permission.BLUETOOTH
+            needed += Manifest.permission.BLUETOOTH_ADMIN
+            needed += Manifest.permission.ACCESS_FINE_LOCATION
         }
 
         val denied = needed.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
-
         if (denied.isNotEmpty()) {
-            ActivityCompat.requestPermissions(this, denied.toTypedArray(), BT_PERMISSION_REQUEST)
+            ActivityCompat.requestPermissions(this, denied.toTypedArray(), PERMISSION_REQUEST)
         }
     }
 
@@ -209,12 +277,14 @@ class MainActivity : AppCompatActivity() {
         requestCode: Int, permissions: Array<String>, grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == BT_PERMISSION_REQUEST) {
-            val allGranted = grantResults.all { it == PackageManager.PERMISSION_GRANTED }
-            if (!allGranted) {
+        if (requestCode == PERMISSION_REQUEST) {
+            val denied = permissions.filterIndexed { i, _ ->
+                grantResults.getOrElse(i) { PackageManager.PERMISSION_DENIED } != PackageManager.PERMISSION_GRANTED
+            }
+            if (denied.isNotEmpty()) {
                 Toast.makeText(
                     this,
-                    "Bluetooth permission is needed to connect to the printer.",
+                    "Some features need permissions: ${denied.joinToString { it.substringAfterLast('.') }}",
                     Toast.LENGTH_LONG
                 ).show()
             }
