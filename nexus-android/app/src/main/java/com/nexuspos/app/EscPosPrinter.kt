@@ -1,40 +1,36 @@
 package com.nexuspos.app
 
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 
 /**
- * Builds an ESC/POS receipt in TEXT MODE using UTF-8 encoding.
- *
- * Why text mode and not bitmap:
- *   - Text mode sends ~1-2 KB per receipt (just character codes)
- *   - Bitmap/raster mode sends ~100-200 KB (one bit per pixel)
- *   - Result: text mode prints in <1 second; bitmap takes 5-10 seconds
- *
- * Devanagari (Marathi) works because modern thermal printers sold in India
- * have a built-in Unicode / UTF-8 font. Zobaze, CottonPOS, and similar apps
- * all use this same text-mode approach — they never send bitmaps for Marathi.
- *
- * Paper width assumed: 80 mm = 48 characters at standard font (Font A, 12 CPI).
+ * Hybrid ESC/POS receipt builder:
+ *   - English text  → text mode (~1 byte/char, instant)
+ *   - Devanagari    → small per-line inline bitmap (~2 KB/line, fast)
+ * Total data: ~25-30 KB vs ~150 KB for full bitmap → prints in 2-3 seconds.
  */
 object EscPosPrinter {
 
-    private const val LINE_CHARS = 48   // characters per line at 80mm, Font A
+    private const val LINE_CHARS = 48
+    private const val PAPER_W    = 576   // 80 mm at 203 DPI
 
-    // ── ESC/POS command bytes ──────────────────────────────────────────────────
+    // ── ESC/POS commands ──────────────────────────────────────────────────────
     private val INIT        = cmd(0x1B, 0x40)
     private val ALIGN_LEFT  = cmd(0x1B, 0x61, 0x00)
     private val ALIGN_CTR   = cmd(0x1B, 0x61, 0x01)
     private val ALIGN_RIGHT = cmd(0x1B, 0x61, 0x02)
     private val BOLD_ON     = cmd(0x1B, 0x45, 0x01)
     private val BOLD_OFF    = cmd(0x1B, 0x45, 0x00)
-    private val DBL_WH      = cmd(0x1D, 0x21, 0x11)   // double width + height
-    private val DBL_H       = cmd(0x1D, 0x21, 0x01)   // double height only
+    private val DBL_WH      = cmd(0x1D, 0x21, 0x11)
+    private val DBL_H       = cmd(0x1D, 0x21, 0x01)
     private val NORMAL_SIZE = cmd(0x1D, 0x21, 0x00)
     private val LF          = byteArrayOf(0x0A)
-    private val FEED_CUT    = cmd(0x1B, 0x64, 0x05,   // feed 5 lines
-                                  0x1D, 0x56, 0x41, 0x00)  // partial cut
+    private val FEED_CUT    = cmd(0x1B, 0x64, 0x05, 0x1D, 0x56, 0x41, 0x00)
 
     // ── Public entry point ────────────────────────────────────────────────────
 
@@ -47,17 +43,16 @@ object EscPosPrinter {
         fun line(s: String = "") { text(s); nl() }
         fun divider()       = line("-".repeat(LINE_CHARS))
 
-        // ── Init ─────────────────────────────────────────────────────────────
         w(INIT)
 
-        // ── Shop header ───────────────────────────────────────────────────────
+        // ── Shop header (English – text mode) ─────────────────────────────────
         w(ALIGN_CTR); w(BOLD_ON); w(DBL_WH)
         line("RAJENDRA GVB")
         w(NORMAL_SIZE); w(BOLD_OFF)
         line("Kirana & Grocery Store")
         divider()
 
-        // ── Bill meta ─────────────────────────────────────────────────────────
+        // ── Bill meta (English – text mode) ───────────────────────────────────
         w(ALIGN_LEFT)
         line("Bill No : ${json.optString("receipt_no", "")}")
         line("Date    : ${json.optString("date", "")}")
@@ -67,13 +62,13 @@ object EscPosPrinter {
         if (phone.isNotEmpty())    line("Mobile  : $phone")
         divider()
 
-        // ── Items ─────────────────────────────────────────────────────────────
-        // Header row
+        // ── Items header ──────────────────────────────────────────────────────
         w(BOLD_ON)
         line(cols("Item", "Qty", "Rate", "Amt", LINE_CHARS))
         w(BOLD_OFF)
         divider()
 
+        // ── Items (hybrid) ────────────────────────────────────────────────────
         val items = json.optJSONArray("items") ?: JSONArray()
         for (i in 0 until items.length()) {
             val item = items.getJSONObject(i)
@@ -83,23 +78,28 @@ object EscPosPrinter {
             val amt  = item.optDouble("total", 0.0)
             val unit = item.optString("cartUnit", item.optString("unit", ""))
 
-            // Item name on its own line (Marathi/Devanagari sent as UTF-8 bytes;
-            // the printer's built-in Unicode font renders it natively — same speed
-            // as ASCII because only character codes are transmitted, not pixels)
-            line("${i + 1}. $name")
+            val displayName = "${i + 1}. $name"
+            w(ALIGN_LEFT)
 
-            // Numeric row — right-aligned
+            if (hasDevanagari(name)) {
+                // Render as a tiny per-line bitmap so the printer's built-in
+                // Android Noto Devanagari font draws it — ~2 KB per line
+                w(renderDevanagariLine(displayName, 26f))
+            } else {
+                line(displayName)
+            }
+
+            // Numbers are always ASCII → text mode
             w(ALIGN_RIGHT)
             line("${fmtN(qty)} $unit   ${fmtN(rate)}   ${fmtN(amt)}")
             w(ALIGN_LEFT)
         }
         divider()
 
-        // ── Total ─────────────────────────────────────────────────────────────
+        // ── Total (text mode) ─────────────────────────────────────────────────
         val total = json.optDouble("total", 0.0)
         w(BOLD_ON); w(DBL_H)
-        val totalLine = padBothEnds("TOTAL", "Rs.${fmtN(total)}", LINE_CHARS)
-        line(totalLine)
+        line(padBothEnds("TOTAL", "Rs.${fmtN(total)}", LINE_CHARS))
         w(NORMAL_SIZE); w(BOLD_OFF)
         divider()
 
@@ -108,27 +108,71 @@ object EscPosPrinter {
         line("* Thank You — Visit Again! *")
         nl(); nl()
 
-        // ── Feed + Cut ────────────────────────────────────────────────────────
         w(FEED_CUT)
-
         return out.toByteArray()
     }
 
-    // ── Formatting helpers ────────────────────────────────────────────────────
+    // ── Devanagari → inline ESC/POS raster ───────────────────────────────────
 
-    /** Pad left+right so that `left` is left-aligned and `right` is right-aligned. */
+    private fun hasDevanagari(text: String): Boolean =
+        text.any { it.code in 0x0900..0x097F }
+
+    private fun renderDevanagariLine(text: String, fontSize: Float): ByteArray {
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color    = Color.BLACK
+            textSize = fontSize
+        }
+        val lineH = (fontSize * 1.6f).toInt().coerceAtLeast(40)
+        val bm = Bitmap.createBitmap(PAPER_W, lineH, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bm)
+        canvas.drawColor(Color.WHITE)
+        canvas.drawText(text, 4f, fontSize + 6f, paint)
+
+        return bitmapLineToEscPos(bm).also { bm.recycle() }
+    }
+
+    private fun bitmapLineToEscPos(bm: Bitmap): ByteArray {
+        val w      = bm.width
+        val h      = bm.height
+        val bpr    = (w + 7) / 8
+        val pixels = IntArray(w * h)
+        bm.getPixels(pixels, 0, w, 0, 0, w, h)
+
+        val out = ByteArrayOutputStream(8 + bpr * h)
+        // GS v 0 — raster image
+        out.write(0x1D); out.write(0x76); out.write(0x30); out.write(0x00)
+        out.write(bpr and 0xFF); out.write((bpr shr 8) and 0xFF)
+        out.write(h   and 0xFF); out.write((h   shr 8) and 0xFF)
+
+        for (y in 0 until h) {
+            for (bx in 0 until bpr) {
+                var byte = 0
+                for (bit in 0 until 8) {
+                    val x = bx * 8 + bit
+                    if (x < w) {
+                        val px  = pixels[y * w + x]
+                        val lum = (Color.red(px) * 299 +
+                                   Color.green(px) * 587 +
+                                   Color.blue(px)  * 114) / 1000
+                        if (lum < 128) byte = byte or (0x80 shr bit)
+                    }
+                }
+                out.write(byte)
+            }
+        }
+        return out.toByteArray()
+    }
+
+    // ── Text helpers ──────────────────────────────────────────────────────────
+
     private fun padBothEnds(left: String, right: String, width: Int): String {
         val space = (width - left.length - right.length).coerceAtLeast(1)
         return left + " ".repeat(space) + right
     }
 
-    /** Simple 4-column header row with space-separated values. */
-    private fun cols(c1: String, c2: String, c3: String, c4: String, width: Int): String {
-        val right = "$c2   $c3   $c4"
-        return padBothEnds(c1, right, width)
-    }
+    private fun cols(c1: String, c2: String, c3: String, c4: String, width: Int): String =
+        padBothEnds(c1, "$c2   $c3   $c4", width)
 
-    /** Format a number: no decimals if whole, 2 decimal places otherwise. */
     private fun fmtN(n: Double): String =
         if (n == n.toLong().toDouble()) n.toLong().toString()
         else "%.2f".format(n)
