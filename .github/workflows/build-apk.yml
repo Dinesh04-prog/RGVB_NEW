@@ -57,18 +57,15 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: '8.6'
-
-      - name: Generate Gradle wrapper
-        working-directory: nexus-android
-        run: gradle wrapper --gradle-version 8.6
+      - name: Install Gradle 8.6
+        run: |
+          wget -q https://services.gradle.org/distributions/gradle-8.6-bin.zip -O /tmp/gradle.zip
+          sudo unzip -q /tmp/gradle.zip -d /opt
+          echo "/opt/gradle-8.6/bin" >> $GITHUB_PATH
 
       - name: Build release APK
         working-directory: nexus-android
-        run: ./gradlew assembleRelease --no-daemon
+        run: gradle assembleRelease --no-daemon
 
       # ── 5. Upload APK as downloadable artifact ───────────────────────────────
       - name: Upload APK

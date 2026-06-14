@@ -3,7 +3,6 @@ package com.nexuspos.app
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Message
@@ -93,11 +92,6 @@ class MainActivity : AppCompatActivity() {
                 injectBluetoothBridge()
             }
 
-            override fun onReceivedError(
-                view: WebView, request: WebResourceRequest, error: WebResourceError
-            ) {
-                Log.e(TAG, "WebView error: ${error.description} on ${request.url}")
-            }
         }
 
         webView.webChromeClient = object : WebChromeClient() {
