@@ -65,7 +65,7 @@ class BluetoothPrintManager(private val activity: MainActivity) {
         }.start()
     }
 
-    // ── Native bitmap print (Android Canvas + Noto Devanagari) ───────────────
+    // ── Native text-mode print (UTF-8 ESC/POS — fast, like Zobaze) ───────────
 
     fun printBillNative(receiptJson: String) {
         if (output == null) {
@@ -74,11 +74,11 @@ class BluetoothPrintManager(private val activity: MainActivity) {
         }
         Thread {
             try {
-                val json   = org.json.JSONObject(receiptJson)
-                val bytes  = BitmapPrinter.receiptToEscPos(json)
+                val json  = org.json.JSONObject(receiptJson)
+                val bytes = EscPosPrinter.buildReceipt(json)
                 output?.write(bytes)
                 output?.flush()
-                toast("Printed successfully")
+                toast("Printed ✓")
             } catch (e: Exception) {
                 toast("Print failed: ${e.message}")
                 handleDisconnect()
