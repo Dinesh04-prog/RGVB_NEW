@@ -17,6 +17,11 @@ object BitmapPrinter {
     private const val MARGIN  = 18f
     private const val LINE_GAP = 6f
 
+    // Fixed right-edge X for each numeric column
+    private const val COL_QTY  = 320f
+    private const val COL_RATE = 430f
+    private const val COL_AMT  = PAPER_W - MARGIN  // 558f
+
     // ── Public entry point ────────────────────────────────────────────────────
 
     /** Receipt JSON → ready-to-send ESC/POS byte array */
@@ -65,11 +70,13 @@ object BitmapPrinter {
         y = divider(canvas, line, y)
 
         // ── Items header ─────────────────────────────────────────────────────
-        bold.textSize   = 22f
-        bold.textAlign  = Paint.Align.LEFT
+        bold.textSize  = 22f
+        bold.textAlign = Paint.Align.LEFT
         canvas.drawText("#  Item", MARGIN, y + 22f, bold)
-        bold.textAlign  = Paint.Align.RIGHT
-        canvas.drawText("Qty    Rate    Amt", PAPER_W - MARGIN, y + 22f, bold)
+        bold.textAlign = Paint.Align.RIGHT
+        canvas.drawText("Qty",  COL_QTY,  y + 22f, bold)
+        canvas.drawText("Rate", COL_RATE, y + 22f, bold)
+        canvas.drawText("Amt",  COL_AMT,  y + 22f, bold)
         y += 30f
         y = divider(canvas, line, y)
 
@@ -83,27 +90,29 @@ object BitmapPrinter {
             val amt   = item.optDouble("total", 0.0)
             val unit  = item.optString("cartUnit", item.optString("unit", ""))
 
-            // Wrap name within 55% of paper width (leaves room for numbers)
-            val nameMaxW = PAPER_W * 0.55f - MARGIN
-            normal.textSize  = 24f
+            // Wrap name within space left of the Qty column
+            val nameMaxW = COL_QTY - MARGIN - 10f
+            normal.textSize  = 22f
             normal.textAlign = Paint.Align.LEFT
             val nameLines = wrapText(name, normal, nameMaxW)
-            val rowH = (nameLines.size * 30f + LINE_GAP).coerceAtLeast(34f)
+            val lineH = 28f
+            val rowH  = (nameLines.size * lineH + LINE_GAP).coerceAtLeast(32f)
 
             // Draw name lines (Devanagari rendered via Android font fallback)
             for ((li, ln) in nameLines.withIndex()) {
-                canvas.drawText(ln, MARGIN, y + 24f + li * 30f, normal)
+                canvas.drawText(ln, MARGIN, y + 22f + li * lineH, normal)
             }
 
-            // Numbers — right-aligned, vertically centred in the row
+            // Numbers — each drawn right-aligned at its own fixed column X
             val numPaint = makePaint(bold = false).apply {
                 textSize  = 22f
                 textAlign = Paint.Align.RIGHT
             }
-            val midY = y + rowH / 2f + 11f
-            val qtyStr = "${fmtNum(qty)} $unit"
-            canvas.drawText("$qtyStr   ${fmtNum(rate)}   ${fmtNum(amt)}",
-                PAPER_W - MARGIN, midY, numPaint)
+            val numY   = y + 22f   // align to first name line baseline
+            val qtyStr = if (unit.isNotEmpty()) "${fmtNum(qty)} $unit" else fmtNum(qty)
+            canvas.drawText(qtyStr,       COL_QTY,  numY, numPaint)
+            canvas.drawText(fmtNum(rate), COL_RATE, numY, numPaint)
+            canvas.drawText(fmtNum(amt),  COL_AMT,  numY, numPaint)
 
             y += rowH
         }
