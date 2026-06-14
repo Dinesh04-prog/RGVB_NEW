@@ -47,7 +47,46 @@ jobs:
           mkdir -p nexus-android/app/src/main/assets
           cp -r nexus-react-pos/dist/. nexus-android/app/src/main/assets/
 
-      # ── 4. Build Android APK ─────────────────────────────────────────────────
+      # ── 4. Generate app icons from company logo ──────────────────────────────
+      - name: Generate app icons from shop-logo.jpeg
+        run: |
+          pip install Pillow --quiet
+          python3 - <<'EOF'
+          import os
+          from PIL import Image, ImageDraw
+
+          logo = Image.open("nexus-react-pos/public/shop-logo.jpeg").convert("RGBA")
+
+          sizes = {
+              "mdpi":    48,
+              "hdpi":    72,
+              "xhdpi":   96,
+              "xxhdpi":  144,
+              "xxxhdpi": 192,
+          }
+
+          for dpi, size in sizes.items():
+              out = f"nexus-android/app/src/main/res/mipmap-{dpi}"
+              os.makedirs(out, exist_ok=True)
+
+              img = logo.resize((size, size), Image.LANCZOS)
+
+              # Square launcher icon
+              bg = Image.new("RGBA", (size, size), (255, 255, 255, 255))
+              bg.paste(img, mask=img.split()[3])
+              bg.convert("RGB").save(f"{out}/ic_launcher.png")
+
+              # Round launcher icon (circular crop with white bg)
+              mask = Image.new("L", (size, size), 0)
+              ImageDraw.Draw(mask).ellipse((0, 0, size - 1, size - 1), fill=255)
+              bg2 = Image.new("RGBA", (size, size), (255, 255, 255, 255))
+              bg2.paste(img, mask=mask)
+              bg2.convert("RGB").save(f"{out}/ic_launcher_round.png")
+
+          print("Icons generated successfully")
+          EOF
+
+      # ── 5. Build Android APK ─────────────────────────────────────────────────
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
@@ -67,7 +106,7 @@ jobs:
         working-directory: nexus-android
         run: gradle assembleRelease --no-daemon
 
-      # ── 5. Upload APK as downloadable artifact ───────────────────────────────
+      # ── 6. Upload APK as downloadable artifact ───────────────────────────────
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
@@ -75,7 +114,7 @@ jobs:
           path: nexus-android/app/build/outputs/apk/release/app-release.apk
           retention-days: 30
 
-      # ── 6. Print download instructions in the run log ────────────────────────
+      # ── 7. Print download instructions in the run log ────────────────────────
       - name: Print install instructions
         run: |
           echo "========================================"
