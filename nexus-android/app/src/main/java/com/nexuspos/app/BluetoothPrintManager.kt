@@ -75,7 +75,7 @@ class BluetoothPrintManager(private val activity: MainActivity) {
         Thread {
             try {
                 val json  = org.json.JSONObject(receiptJson)
-                val bytes = EscPosPrinter.buildReceipt(json)
+                val bytes = EscPosPrinter.buildReceipt(json, activity)
                 output?.write(bytes)
                 output?.flush()
                 toast("Printed ✓")

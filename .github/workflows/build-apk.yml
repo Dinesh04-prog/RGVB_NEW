@@ -46,6 +46,7 @@ jobs:
         run: |
           mkdir -p nexus-android/app/src/main/assets
           cp -r nexus-react-pos/dist/. nexus-android/app/src/main/assets/
+          cp nexus-react-pos/public/shop-logo.jpeg nexus-android/app/src/main/assets/shop-logo.jpeg
 
       # ── 4. Generate app icons from company logo ──────────────────────────────
       - name: Generate app icons from shop-logo.jpeg
