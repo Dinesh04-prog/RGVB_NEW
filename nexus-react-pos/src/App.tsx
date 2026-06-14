@@ -1613,11 +1613,15 @@ export default function App() {
     const renderItemRowToRaster = (item: any, index: number): Uint8Array => {
       const PW = 576;
       const padding = 6;
-      const Wcols = 40; const C1 = 18, C2 = 5, C3 = 8, C4 = 9;
-      const col1 = Math.floor(PW * C1 / Wcols);
-      const col2 = Math.floor(PW * C2 / Wcols);
-      const col3 = Math.floor(PW * C3 / Wcols);
-      const col4 = Math.floor(PW * C4 / Wcols);
+      // Mirror the same column widths used in text-mode so headers & values align
+      const W = 48;
+      const tC1 = isShortBillMode ? 29 : 19;
+      const tC2 = 10;
+      const tC3 = isShortBillMode ? 0 : 9;
+      const col1 = Math.floor(PW * tC1 / W);
+      const col2 = Math.floor(PW * tC2 / W);
+      const col3 = Math.floor(PW * tC3 / W);
+      const col4 = PW - col1 - col2 - col3;
 
       const fontDevSize = 24;
       const fontNumSize = 20;
@@ -1678,8 +1682,10 @@ export default function App() {
 
       ctx.strokeText(qtyStr, xQty, yNum);
       ctx.fillText(qtyStr, xQty, yNum);
-      ctx.strokeText(rateStr, xRate, yNum);
-      ctx.fillText(rateStr, xRate, yNum);
+      if (!isShortBillMode) {
+        ctx.strokeText(rateStr, xRate, yNum);
+        ctx.fillText(rateStr, xRate, yNum);
+      }
       ctx.strokeText(amtStr, xAmt, yNum);
       ctx.fillText(amtStr, xAmt, yNum);
 
@@ -3512,7 +3518,10 @@ export default function App() {
               />
               <select
                 value={sbModal.unit}
-                onChange={(e) => setSbModal({ ...sbModal, unit: e.target.value })}
+                onChange={(e) => {
+                  setSbModal({ ...sbModal, unit: e.target.value });
+                  setTimeout(() => sbFocusNext(sbRateInputRef), 100);
+                }}
                 style={{ padding: '10px', borderRadius: '8px', border: '1px solid #ccc', fontWeight: 'bold' }}
               >
                 {['pcs', 'kg', 'g', 'L', 'ml', 'packet', 'box', 'bag', 'dozen', 'mal'].map(u => (
