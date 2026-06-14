@@ -1,6 +1,8 @@
 package com.nexuspos.app
 
+import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -22,9 +24,12 @@ object EscPosPrinter {
     // Fixed right-edge X for each numeric column (pixels on 576px paper)
     private const val MARGIN_PX  = 4f
     private const val COL_QTY    = 336f   // Qty right edge  (name ends at ~214px, gap ≥ 47px)
-    private const val COL_RATE   = 444f   // Rate right edge
+    private const val COL_RATE   = 444f   // Rate right edge (full bill only)
     private const val COL_AMT    = PAPER_W - MARGIN_PX   // 572f, Amt right edge
     private const val NAME_MAX_W = 210f   // max px width for name text (4→214px)
+
+    // Short bill has no Rate column — Qty shifts right to fill the space
+    private const val SB_COL_QTY = 400f
 
     // ── ESC/POS commands ──────────────────────────────────────────────────────
     private val INIT        = cmd(0x1B, 0x40)
@@ -36,11 +41,11 @@ object EscPosPrinter {
     private val DBL_H       = cmd(0x1D, 0x21, 0x01)
     private val NORMAL_SIZE = cmd(0x1D, 0x21, 0x00)
     private val LF          = byteArrayOf(0x0A)
-    private val FEED_CUT    = cmd(0x1B, 0x64, 0x05, 0x1D, 0x56, 0x41, 0x00)
+    private val FEED_CUT    = cmd(0x1B, 0x64, 0x02, 0x1D, 0x56, 0x41, 0x00)
 
     // ── Public entry point ────────────────────────────────────────────────────
 
-    fun buildReceipt(json: JSONObject): ByteArray {
+    fun buildReceipt(json: JSONObject, context: Context): ByteArray {
         val out = ByteArrayOutputStream()
 
         fun w(b: ByteArray) = out.write(b)
@@ -50,6 +55,10 @@ object EscPosPrinter {
         fun divider()       = line("-".repeat(LINE_CHARS))
 
         w(INIT)
+
+        // ── Company logo ──────────────────────────────────────────────────────
+        w(ALIGN_CTR)
+        renderLogo(context)?.let { w(it) }
 
         // ── Shop header ───────────────────────────────────────────────────────
         w(ALIGN_CTR); w(BOLD_ON); w(DBL_WH)
@@ -68,8 +77,10 @@ object EscPosPrinter {
         if (phone.isNotEmpty())    line("Mobile  : $phone")
         divider()
 
+        val isShortBill = json.optBoolean("isShortBill", false)
+
         // ── Items header — bitmap so pixel columns match item rows ────────────
-        w(renderHeaderRow(26f))
+        w(renderHeaderRow(26f, isShortBill))
         divider()
 
         // ── Items ─────────────────────────────────────────────────────────────
@@ -85,7 +96,7 @@ object EscPosPrinter {
             val displayName = "${i + 1}. $name"
             val qtyStr      = if (unit.isNotEmpty()) "${fmtN(qty)} $unit" else fmtN(qty)
 
-            w(renderItemRow(displayName, qtyStr, fmtN(rate), fmtN(amt), 26f))
+            w(renderItemRow(displayName, qtyStr, fmtN(rate), fmtN(amt), 26f, isShortBill))
         }
         divider()
 
@@ -99,7 +110,6 @@ object EscPosPrinter {
         // ── Footer ────────────────────────────────────────────────────────────
         w(ALIGN_CTR)
         line("* Thank You -- Visit Again! *")
-        nl(); nl()
 
         w(FEED_CUT)
         return out.toByteArray()
@@ -107,10 +117,35 @@ object EscPosPrinter {
 
     // ── Bitmap row renderers ──────────────────────────────────────────────────
 
-    /** Header row: "Item" left, "Qty / Rate / Amt" at their fixed column X positions. */
-    private fun renderHeaderRow(fontSize: Float): ByteArray {
+    /** Loads shop-logo.jpeg from assets, scales to 180px wide, centers on paper. */
+    private fun renderLogo(context: Context): ByteArray? {
+        return try {
+            val raw = context.assets.open("shop-logo.jpeg").use {
+                BitmapFactory.decodeStream(it)
+            } ?: return null
+
+            val logoW = 180
+            val logoH = (raw.height.toFloat() * logoW / raw.width).toInt()
+            val scaled = Bitmap.createScaledBitmap(raw, logoW, logoH, true)
+            raw.recycle()
+
+            val bm     = Bitmap.createBitmap(PAPER_W, logoH + 8, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bm)
+            canvas.drawColor(Color.WHITE)
+            canvas.drawBitmap(scaled, ((PAPER_W - logoW) / 2).toFloat(), 4f, null)
+            scaled.recycle()
+
+            bitmapLineToEscPos(bm).also { bm.recycle() }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** Header row: "Item" left, columns right. Rate skipped for short bills. */
+    private fun renderHeaderRow(fontSize: Float, isShortBill: Boolean): ByteArray {
         val lineH    = (fontSize * 1.6f).toInt().coerceAtLeast(40)
         val baseline = fontSize + 4f
+        val colQty   = if (isShortBill) SB_COL_QTY else COL_QTY
         val bm       = Bitmap.createBitmap(PAPER_W, lineH, Bitmap.Config.ARGB_8888)
         val canvas   = Canvas(bm)
         canvas.drawColor(Color.WHITE)
@@ -125,9 +160,9 @@ object EscPosPrinter {
         canvas.drawText("Item", MARGIN_PX, baseline, paint)
 
         paint.textAlign = Paint.Align.RIGHT
-        canvas.drawText("Qty",  COL_QTY,  baseline, paint)
-        canvas.drawText("Rate", COL_RATE, baseline, paint)
-        canvas.drawText("Amt",  COL_AMT,  baseline, paint)
+        canvas.drawText("Qty", colQty,  baseline, paint)
+        if (!isShortBill) canvas.drawText("Rate", COL_RATE, baseline, paint)
+        canvas.drawText("Amt", COL_AMT, baseline, paint)
 
         return bitmapLineToEscPos(bm).also { bm.recycle() }
     }
@@ -142,9 +177,11 @@ object EscPosPrinter {
         qtyStr:      String,
         rateStr:     String,
         amtStr:      String,
-        fontSize:    Float
+        fontSize:    Float,
+        isShortBill: Boolean = false
     ): ByteArray {
-        val lineH = (fontSize * 1.6f).toInt().coerceAtLeast(40)
+        val lineH  = (fontSize * 1.6f).toInt().coerceAtLeast(40)
+        val colQty = if (isShortBill) SB_COL_QTY else COL_QTY
 
         val namePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color    = Color.BLACK
@@ -170,9 +207,9 @@ object EscPosPrinter {
             textAlign = Paint.Align.RIGHT
         }
         val numY = fontSize + 4f
-        canvas.drawText(qtyStr,  COL_QTY,  numY, numPaint)
-        canvas.drawText(rateStr, COL_RATE, numY, numPaint)
-        canvas.drawText(amtStr,  COL_AMT,  numY, numPaint)
+        canvas.drawText(qtyStr, colQty,  numY, numPaint)
+        if (!isShortBill) canvas.drawText(rateStr, COL_RATE, numY, numPaint)
+        canvas.drawText(amtStr, COL_AMT, numY, numPaint)
 
         return bitmapLineToEscPos(bm).also { bm.recycle() }
     }
