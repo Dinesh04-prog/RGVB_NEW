@@ -108,8 +108,7 @@ export default function App() {
 
   // Short Billing
   const [sbCart, setSbCart] = useState<CartItem[]>([]);
-  const [sbQuery, setSbQuery] = useState("");
-  const [sbIsDictating, setSbIsDictating] = useState(false);
+
   const [sbModal, setSbModal] = useState<{ name: string; qty: number; unit: string; rate: number; isEdit?: boolean; editIndex?: number } | null>(null);
   const [sbHeldBills, setSbHeldBills] = useState<{ id: string; cart: CartItem[]; customerName: string; customerPhone: string; heldAt: number }[]>([]);
   const [showSbHeldBills, setShowSbHeldBills] = useState(false);
@@ -1014,11 +1013,6 @@ export default function App() {
     }
   };
 
-  const openSbModal = (name: string) => {
-    if (!name.trim()) return;
-    setSbModal({ name: name.trim(), qty: 1, unit: 'pcs', rate: 0 });
-  };
-
   const addToSbCart = () => {
     if (!sbModal) return;
     const { name, qty, unit, rate, isEdit, editIndex } = sbModal;
@@ -1043,24 +1037,6 @@ export default function App() {
 
   const removeSbCartItem = (index: number) => {
     setSbCart(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const handleSbVoice = () => {
-    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SR) { alert('Voice not supported in this browser'); return; }
-    if (sbIsDictating) { setSbIsDictating(false); return; }
-    setSbIsDictating(true);
-    const rec = new SR();
-    rec.lang = 'mr-IN';
-    rec.interimResults = false;
-    rec.maxAlternatives = 1;
-    rec.onend = () => setSbIsDictating(false);
-    rec.onerror = () => setSbIsDictating(false);
-    rec.onresult = (event: any) => {
-      setSbQuery(event.results[0][0].transcript);
-      setSbIsDictating(false);
-    };
-    rec.start();
   };
 
   const generateReceiptText = (r: Receipt) => {
