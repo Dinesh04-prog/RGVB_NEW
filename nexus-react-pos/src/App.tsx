@@ -1005,7 +1005,7 @@ export default function App() {
     const total = sbCart.reduce((s, c) => s + c.total, 0);
     try {
       const billNo = await getNextBillNumber();
-      const receipt = await saveSale(sbCart, total, customerName, customerPhone, billNo);
+      const receipt = await saveSale(sbCart, total, customerName, customerPhone, billNo, true);
       setLastReceipt(receipt);
       setSbCart([]);
       setCustomerName("");
@@ -2666,7 +2666,7 @@ export default function App() {
               {viewingReceipt && (
                 <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                   <button
-                    onClick={() => { setLastReceipt(viewingReceipt); setViewingReceipt(null); setIsShortBillMode(false); setReceiptShareOpen(true); }}
+                    onClick={() => { setLastReceipt(viewingReceipt); setViewingReceipt(null); setIsShortBillMode(viewingReceipt.isShortBill ?? false); setReceiptShareOpen(true); }}
                     style={{ background: '#25D366', color: 'white', border: 'none', borderRadius: '8px', padding: '8px 14px', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.85rem' }}
                   >
                     📲 Share Again
@@ -2701,7 +2701,7 @@ export default function App() {
                     <tr style={{ borderBottom: '1px solid #ccc', color: '#6c757d' }}>
                       <th style={{ textAlign: 'left', padding: '6px 4px', fontWeight: '600' }}>Item</th>
                       <th style={{ textAlign: 'center', padding: '6px 4px', fontWeight: '600' }}>Qty</th>
-                      <th style={{ textAlign: 'right', padding: '6px 4px', fontWeight: '600' }}>Rate</th>
+                      {!viewingReceipt.isShortBill && <th style={{ textAlign: 'right', padding: '6px 4px', fontWeight: '600' }}>Rate</th>}
                       <th style={{ textAlign: 'right', padding: '6px 4px', fontWeight: '600' }}>Amt</th>
                     </tr>
                   </thead>
@@ -2710,7 +2710,7 @@ export default function App() {
                       <tr key={idx} style={{ borderBottom: '1px solid #f0f0f0' }}>
                         <td style={{ padding: '6px 4px', fontWeight: '500' }}>{item.name}</td>
                         <td style={{ textAlign: 'center', padding: '6px 4px' }}>{item.qty}{item.cartUnit && item.cartUnit !== item.unit ? item.cartUnit : ''}</td>
-                        <td style={{ textAlign: 'right', padding: '6px 4px', color: '#555' }}>₹{(item.rate * (item.multiplier || 1)).toFixed(2)}</td>
+                        {!viewingReceipt.isShortBill && <td style={{ textAlign: 'right', padding: '6px 4px', color: '#555' }}>₹{(item.rate * (item.multiplier || 1)).toFixed(2)}</td>}
                         <td style={{ textAlign: 'right', padding: '6px 4px', fontWeight: 'bold', color: '#0d6efd' }}>₹{item.total.toFixed(2)}</td>
                       </tr>
                     ))}
@@ -2809,7 +2809,7 @@ export default function App() {
                       style={{ padding: '12px 16px', marginBottom: '8px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}
                     >
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontWeight: 'bold', fontSize: '1rem', color: '#0a3d62' }}>#{receipt.receipt_no}</div>
+                        <div style={{ fontWeight: 'bold', fontSize: '1rem', color: '#0a3d62' }}>{receipt.isShortBill ? 'S' : '#'}{receipt.receipt_no}</div>
                         <div style={{ fontSize: '0.78rem', color: '#6c757d', marginTop: '2px' }}>{receipt.date}</div>
                         {receipt.customerName && <div style={{ fontSize: '0.8rem', color: '#444', marginTop: '2px' }}>👤 {receipt.customerName}{receipt.customerPhone ? ` · ${receipt.customerPhone}` : ''}</div>}
                         <div style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '2px' }}>{receipt.items.length} item{receipt.items.length !== 1 ? 's' : ''}</div>

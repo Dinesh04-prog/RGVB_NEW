@@ -19,6 +19,7 @@ export interface Receipt {
   total: number;
   customerName?: string;
   customerPhone?: string;
+  isShortBill?: boolean;
 }
 
 // Initialize LocalForage instances safely 
@@ -30,10 +31,10 @@ if (typeof window !== 'undefined') {
 }
 
 // Save a sale locally
-export const saveSale = async (items: CartItem[], total: number, customerName?: string, customerPhone?: string, receipt_no?: string): Promise<Receipt> => {
+export const saveSale = async (items: CartItem[], total: number, customerName?: string, customerPhone?: string, receipt_no?: string, isShortBill?: boolean): Promise<Receipt> => {
   const final_receipt_no = receipt_no || `AA-${new Date().toISOString().replace(/\D/g, '').slice(0, 8)}`;
-  
-  const receipt: Receipt = { receipt_no: final_receipt_no, date: new Date().toLocaleString(), items, total, customerName, customerPhone };
+
+  const receipt: Receipt = { receipt_no: final_receipt_no, date: new Date().toLocaleString(), items, total, customerName, customerPhone, isShortBill };
   
   try {
     const existingSales: Receipt[] = await localforage.getItem('sales') || [];
