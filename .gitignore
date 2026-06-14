@@ -30,4 +30,4 @@ nexus-android/.gradle/
 nexus-android/app/build/
 nexus-android/build/
 nexus-android/local.properties
-nexus-android/app/src/main/assets/www/
+nexus-android/app/src/main/assets/

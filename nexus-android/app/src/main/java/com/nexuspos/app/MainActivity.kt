@@ -72,7 +72,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        webView.loadUrl("https://appassets.androidplatform.net/www/index.html")
+        webView.loadUrl("https://appassets.androidplatform.net/index.html")
     }
 
     private fun injectBluetoothBridge() {

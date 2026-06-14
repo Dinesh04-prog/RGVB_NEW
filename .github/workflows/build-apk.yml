@@ -29,20 +29,23 @@ jobs:
         working-directory: nexus-react-pos
         run: npm run build
         env:
-          # Pass all VITE_ secrets from GitHub Secrets so the build works
-          VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
-          VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}
-          VITE_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID }}
-          VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}
-          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
-          VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
-          VITE_GOOGLE_CLIENT_ID: ${{ secrets.VITE_GOOGLE_CLIENT_ID }}
+          VITE_GOOGLE_CLIENT_ID: "786802419853-8m6fpah9na9ecdhfc8fo8d55e3b5r728.apps.googleusercontent.com"
+          VITE_OWNER_EMAIL: "rajendragvb2801@gmail.com"
+          VITE_OWNER_PHONE: "917385391971"
+          VITE_APP_URL: "https://appassets.androidplatform.net"
+          VITE_FIREBASE_API_KEY: "AIzaSyArkZiqGAUJRqiBKQmYndBWTfpDq-4SWiM"
+          VITE_FIREBASE_AUTH_DOMAIN: "nexus-pos-817c3.firebaseapp.com"
+          VITE_FIREBASE_PROJECT_ID: "nexus-pos-817c3"
+          VITE_FIREBASE_STORAGE_BUCKET: "nexus-pos-817c3.firebasestorage.app"
+          VITE_FIREBASE_MESSAGING_SENDER_ID: "77380160715"
+          VITE_FIREBASE_APP_ID: "1:77380160715:web:c6cd94906ee7fcc24b9f4e"
+          VITE_FIREBASE_MEASUREMENT_ID: "G-QSGXW4SQLV"
 
       # ── 3. Copy web build into Android assets ────────────────────────────────
       - name: Copy dist → Android assets
         run: |
-          mkdir -p nexus-android/app/src/main/assets/www
-          cp -r nexus-react-pos/dist/. nexus-android/app/src/main/assets/www/
+          mkdir -p nexus-android/app/src/main/assets
+          cp -r nexus-react-pos/dist/. nexus-android/app/src/main/assets/
 
       # ── 4. Build Android APK ─────────────────────────────────────────────────
       - name: Set up Java 17
