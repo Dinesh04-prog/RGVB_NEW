@@ -114,10 +114,10 @@ export default function App() {
   const [showSbHeldBills, setShowSbHeldBills] = useState(false);
   const sbNameInputRef = useRef<HTMLInputElement>(null);
   const sbQtyInputRef = useRef<HTMLInputElement>(null);
-  const sbUnitSelectRef = useRef<HTMLSelectElement>(null);
   const sbRateInputRef = useRef<HTMLInputElement>(null);
   const sbTotalInputRef = useRef<HTMLInputElement>(null);
   const sbModalKeyRef = useRef(0);
+  const [sbShowUnitPicker, setSbShowUnitPicker] = useState(false);
   const [isShortBillMode, setIsShortBillMode] = useState(false);
 
   // Bluetooth Printer
@@ -908,6 +908,7 @@ export default function App() {
     setCustomerName('');
     setCustomerPhone('');
     setSbModal(null);
+    setSbShowUnitPicker(false);
   };
 
   const sbResumeBill = async (id: string) => {
@@ -924,6 +925,7 @@ export default function App() {
     setCustomerPhone(held.customerPhone);
     setShowSbHeldBills(false);
     setSbModal(null);
+    setSbShowUnitPicker(false);
   };
 
   const sbDiscardHeldBill = async (id: string) => {
@@ -1024,10 +1026,12 @@ export default function App() {
     if (isEdit && editIndex !== undefined) {
       setSbCart(prev => prev.map((c, i) => i === editIndex ? item : c));
       setSbModal(null);
+      setSbShowUnitPicker(false);
     } else {
       setSbCart(prev => [...prev, item]);
       sbModalKeyRef.current += 1;
       setSbModal({ name: '', qty: 1, unit: 'pcs', rate: 0 });
+      setSbShowUnitPicker(false);
     }
   };
 
@@ -3483,7 +3487,7 @@ export default function App() {
           <div className="modal-content" style={{ paddingBottom: 24 }}>
             <div className="modal-header">
               <span>{sbModal.isEdit ? 'EDIT ITEM' : 'ADD ITEM'}</span>
-              <button style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: '1.2rem' }} onClick={() => setSbModal(null)}>✕</button>
+              <button style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: '1.2rem' }} onClick={() => { setSbModal(null); setSbShowUnitPicker(false); }}>✕</button>
             </div>
 
             {/* Item name — always editable */}
@@ -3517,26 +3521,38 @@ export default function App() {
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     e.preventDefault();
-                    sbUnitSelectRef.current?.focus();
-                    setTimeout(() => sbUnitSelectRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 350);
+                    setSbShowUnitPicker(true);
                   }
                 }}
                 onChange={(e) => setSbModal({ ...sbModal, qty: Number(e.target.value) })}
               />
-              <select
-                ref={sbUnitSelectRef}
-                value={sbModal.unit}
-                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); sbFocusNext(sbRateInputRef); } }}
-                onChange={(e) => {
-                  setSbModal({ ...sbModal, unit: e.target.value });
-                  setTimeout(() => sbFocusNext(sbRateInputRef), 100);
-                }}
-                style={{ padding: '10px', borderRadius: '8px', border: '1px solid #ccc', fontWeight: 'bold' }}
-              >
-                {['pcs', 'kg', 'g', 'L', 'ml', 'packet', 'box', 'bag', 'dozen', 'mal'].map(u => (
-                  <option key={u} value={u}>{u}</option>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignContent: 'flex-start' }}>
+                {['pcs', 'kg', 'g', 'L', 'ml', 'packet', 'box', 'bag', 'dozen', 'mal'].map((u) => (
+                  <button
+                    key={u}
+                    onClick={() => {
+                      setSbModal({ ...sbModal, unit: u });
+                      setSbShowUnitPicker(false);
+                      setTimeout(() => sbFocusNext(sbRateInputRef), 100);
+                    }}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); setSbModal({ ...sbModal, unit: u }); setSbShowUnitPicker(false); sbFocusNext(sbRateInputRef); } }}
+                    style={{
+                      padding: '6px 10px',
+                      border: sbModal.unit === u ? '2px solid #0d6efd' : '1px solid #ccc',
+                      background: sbModal.unit === u ? '#0d6efd' : '#f8f9fa',
+                      color: sbModal.unit === u ? '#fff' : '#333',
+                      borderRadius: '20px',
+                      fontWeight: sbModal.unit === u ? 'bold' : 'normal',
+                      cursor: 'pointer',
+                      fontSize: '0.85rem',
+                      lineHeight: '1',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {u}
+                  </button>
                 ))}
-              </select>
+              </div>
             </div>
             <div style={{ textAlign: 'center', marginBottom: '10px', fontSize: '0.875rem', color: '#6c757d', fontWeight: 'bold' }}>
               RATE (per {sbModal.unit})
@@ -3580,6 +3596,51 @@ export default function App() {
                 Next item opens automatically · press ✕ to stop
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Short Bill — Unit Picker Bottom Sheet */}
+      {sbShowUnitPicker && sbModal && (
+        <div
+          style={{ position: 'fixed', inset: 0, zIndex: 5100, display: 'flex', alignItems: 'flex-end' }}
+          onClick={() => { setSbShowUnitPicker(false); sbFocusNext(sbRateInputRef); }}
+        >
+          <div
+            style={{ width: '100%', background: '#fff', borderRadius: '20px 20px 0 0', padding: '20px 20px 32px', boxShadow: '0 -8px 32px rgba(0,0,0,0.25)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <span style={{ fontWeight: 'bold', fontSize: '1rem', color: '#0a3d62' }}>SELECT UNIT</span>
+              <button
+                onClick={() => { setSbShowUnitPicker(false); sbFocusNext(sbRateInputRef); }}
+                style={{ border: 'none', background: 'transparent', fontSize: '1.3rem', cursor: 'pointer', color: '#555' }}
+              >✕</button>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '10px' }}>
+              {['pcs', 'kg', 'g', 'L', 'ml', 'packet', 'box', 'bag', 'dozen', 'mal'].map(u => (
+                <button
+                  key={u}
+                  onClick={() => {
+                    setSbModal({ ...sbModal, unit: u });
+                    setSbShowUnitPicker(false);
+                    setTimeout(() => sbFocusNext(sbRateInputRef), 100);
+                  }}
+                  style={{
+                    padding: '14px 6px',
+                    border: sbModal.unit === u ? '2px solid #0d6efd' : '1px solid #dee2e6',
+                    background: sbModal.unit === u ? '#0d6efd' : '#f8f9fa',
+                    color: sbModal.unit === u ? '#fff' : '#333',
+                    borderRadius: '12px',
+                    fontWeight: 'bold',
+                    cursor: 'pointer',
+                    fontSize: '0.95rem',
+                  }}
+                >
+                  {u}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       )}
