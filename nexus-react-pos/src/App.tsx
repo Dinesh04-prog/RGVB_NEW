@@ -111,9 +111,13 @@ export default function App() {
   const [sbQuery, setSbQuery] = useState("");
   const [sbIsDictating, setSbIsDictating] = useState(false);
   const [sbModal, setSbModal] = useState<{ name: string; qty: number; unit: string; rate: number; isEdit?: boolean; editIndex?: number } | null>(null);
+  const [sbHeldBills, setSbHeldBills] = useState<{ id: string; cart: CartItem[]; customerName: string; customerPhone: string; heldAt: number }[]>([]);
+  const [showSbHeldBills, setShowSbHeldBills] = useState(false);
+  const sbNameInputRef = useRef<HTMLInputElement>(null);
   const sbQtyInputRef = useRef<HTMLInputElement>(null);
   const sbRateInputRef = useRef<HTMLInputElement>(null);
   const sbTotalInputRef = useRef<HTMLInputElement>(null);
+  const sbModalKeyRef = useRef(0);
   const [isShortBillMode, setIsShortBillMode] = useState(false);
 
   // Bluetooth Printer
@@ -216,6 +220,10 @@ export default function App() {
         const total = sales.reduce((acc: number, sale: Receipt) => acc + sale.total, 0);
         setTotalProfit(total);
       });
+    }
+    if (activeTab === 'shortbilling') {
+      sbModalKeyRef.current += 1;
+      setSbModal({ name: '', qty: 1, unit: 'pcs', rate: 0 });
     }
   }, [activeTab]);
 
@@ -884,6 +892,46 @@ export default function App() {
     await localforage.setItem('held_bills', updated);
   };
 
+  const sbFocusNext = (ref: React.RefObject<HTMLInputElement | null>) => {
+    ref.current?.focus();
+    ref.current?.select();
+    setTimeout(() => ref.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 350);
+  };
+
+  const sbHoldBill = async () => {
+    if (sbCart.length === 0) return;
+    const entry = { id: Date.now().toString(), cart: sbCart, customerName, customerPhone, heldAt: Date.now() };
+    const updated = [...sbHeldBills, entry];
+    setSbHeldBills(updated);
+    await localforage.setItem('sb_held_bills', updated);
+    setSbCart([]);
+    setCustomerName('');
+    setCustomerPhone('');
+    setSbModal(null);
+  };
+
+  const sbResumeBill = async (id: string) => {
+    const held = sbHeldBills.find(h => h.id === id);
+    if (!held) return;
+    let updated = sbHeldBills.filter(h => h.id !== id);
+    if (sbCart.length > 0) {
+      updated = [...updated, { id: Date.now().toString(), cart: sbCart, customerName, customerPhone, heldAt: Date.now() }];
+    }
+    setSbHeldBills(updated);
+    await localforage.setItem('sb_held_bills', updated);
+    setSbCart(held.cart);
+    setCustomerName(held.customerName);
+    setCustomerPhone(held.customerPhone);
+    setShowSbHeldBills(false);
+    setSbModal(null);
+  };
+
+  const sbDiscardHeldBill = async (id: string) => {
+    const updated = sbHeldBills.filter(h => h.id !== id);
+    setSbHeldBills(updated);
+    await localforage.setItem('sb_held_bills', updated);
+  };
+
   const handleQuickAdd = async () => {
     if (!quickAddItem) return;
     const name = quickAddItem.name.trim();
@@ -974,16 +1022,18 @@ export default function App() {
   const addToSbCart = () => {
     if (!sbModal) return;
     const { name, qty, unit, rate, isEdit, editIndex } = sbModal;
+    if (!name.trim()) { alert('Enter item name'); return; }
     if (!qty || qty <= 0) { alert('Enter valid quantity'); return; }
     const total = qty * rate;
-    const item: CartItem = { id: `sb-${Date.now()}`, name, unit, qty, rate, total, cartUnit: unit, multiplier: 1 };
+    const item: CartItem = { id: `sb-${Date.now()}`, name: name.trim(), unit, qty, rate, total, cartUnit: unit, multiplier: 1 };
     if (isEdit && editIndex !== undefined) {
       setSbCart(prev => prev.map((c, i) => i === editIndex ? item : c));
+      setSbModal(null);
     } else {
       setSbCart(prev => [...prev, item]);
+      sbModalKeyRef.current += 1;
+      setSbModal({ name: '', qty: 1, unit: 'pcs', rate: 0 });
     }
-    setSbModal(null);
-    setSbQuery("");
   };
 
   const editSbCartItem = (index: number) => {
@@ -2356,51 +2406,38 @@ export default function App() {
           <div>
             <div className="billing-header">
               <h2 style={{ fontWeight: 'bold', margin: 0 }}>Short Bill</h2>
-              <button
-                onClick={() => setIsCustomerModalOpen(true)}
-                className={`customer-btn billing-action-btn${customerName ? ' active-cust' : ''}`}
-              >
-                👤 <span className="btn-text">CUSTOMER {customerName ? `(${customerName})` : ''}</span>
-              </button>
-            </div>
-
-            <div className="card">
-              <div className="search-container">
-                <div className="search-inner-row">
-                  <input
-                    type="text"
-                    id="sbNameInput"
-                    placeholder="Item name in Marathi or English..."
-                    value={sbQuery}
-                    autoComplete="off"
-                    style={{ height: 52, borderRadius: 12, border: '2px solid #e1e8ed', paddingLeft: 15, fontSize: '1.1rem', flex: 1, minWidth: 0, outline: 'none' }}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      if (!imeEnabled) { setSbQuery(val); return; }
-                      if (val.endsWith(" ")) {
-                        const translated = translateHinglishToMarathi(val.trim());
-                        setSbQuery(translated + " ");
-                      } else {
-                        setSbQuery(val);
-                      }
-                    }}
-                    onKeyDown={(e) => { if (e.key === 'Enter' && sbQuery.trim()) openSbModal(sbQuery); }}
-                  />
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                <button
+                  onClick={sbHoldBill}
+                  disabled={sbCart.length === 0}
+                  className="billing-action-btn"
+                  style={{ background: sbCart.length === 0 ? '#ccc' : '#f59e0b', color: 'white', border: 'none', padding: '10px 14px', borderRadius: 8, fontWeight: 700, cursor: sbCart.length === 0 ? 'not-allowed' : 'pointer', fontSize: '0.9rem', whiteSpace: 'nowrap' }}
+                >
+                  ⏸ <span className="btn-text">HOLD</span>
+                </button>
+                {sbHeldBills.length > 0 && (
                   <button
-                    onClick={() => setImeEnabled(!imeEnabled)}
-                    className="ime-btn"
-                    style={{ background: imeEnabled ? '#28a745' : '#ccc' }}>
-                    {imeEnabled ? "अ" : "A"}
-                  </button>
-                  <button className={`mic-btn ${sbIsDictating ? 'mic-active' : ''}`} onClick={handleSbVoice}>🎙️</button>
-                  <button
-                    onClick={() => openSbModal(sbQuery)}
-                    disabled={!sbQuery.trim()}
-                    style={{ height: 52, borderRadius: 12, background: sbQuery.trim() ? '#0d6efd' : '#ccc', color: 'white', border: 'none', padding: '0 20px', fontWeight: 'bold', cursor: sbQuery.trim() ? 'pointer' : 'not-allowed', flexShrink: 0, fontSize: '0.95rem' }}
+                    onClick={() => setShowSbHeldBills(true)}
+                    className="billing-action-btn"
+                    style={{ background: '#6366f1', color: 'white', border: 'none', padding: '10px 14px', borderRadius: 8, fontWeight: 700, cursor: 'pointer', fontSize: '0.9rem', whiteSpace: 'nowrap', position: 'relative' }}
                   >
-                    + ADD
+                    ▶ <span className="btn-text">RESUME</span>
+                    <span style={{ background: '#ef4444', color: 'white', borderRadius: '999px', fontSize: '0.7rem', padding: '1px 6px', marginLeft: 6, fontWeight: 900 }}>{sbHeldBills.length}</span>
                   </button>
-                </div>
+                )}
+                <button
+                  onClick={() => setIsCustomerModalOpen(true)}
+                  className={`customer-btn billing-action-btn${customerName ? ' active-cust' : ''}`}
+                >
+                  👤 <span className="btn-text">CUSTOMER {customerName ? `(${customerName})` : ''}</span>
+                </button>
+                <button
+                  onClick={() => { sbModalKeyRef.current += 1; setSbModal({ name: '', qty: 1, unit: 'pcs', rate: 0 }); }}
+                  className="billing-action-btn"
+                  style={{ background: '#0d6efd', color: 'white', border: 'none', padding: '10px 14px', borderRadius: 8, fontWeight: 700, cursor: 'pointer', fontSize: '0.9rem' }}
+                >
+                  ➕ <span className="btn-text">ADD ITEM</span>
+                </button>
               </div>
             </div>
 
@@ -2412,7 +2449,7 @@ export default function App() {
             {/* Desktop cart */}
             <div className="card desktop-cart-table">
               {sbCart.length === 0 ? (
-                <div style={{ textAlign: 'center', color: '#9ca3af', padding: '2rem', fontSize: '0.95rem' }}>No items yet. Type an item name above and press ADD.</div>
+                <div style={{ textAlign: 'center', color: '#9ca3af', padding: '2rem', fontSize: '0.95rem' }}>No items added yet.</div>
               ) : (
                 <div className="table-container">
                   <table className="table">
@@ -2446,7 +2483,7 @@ export default function App() {
             {/* Mobile cart */}
             <div className="mobile-cart-card">
               {sbCart.length === 0 ? (
-                <div className="card" style={{ textAlign: 'center', color: '#9ca3af', padding: '2rem', fontSize: '0.9rem' }}>No items yet.</div>
+                <div className="card" style={{ textAlign: 'center', color: '#9ca3af', padding: '2rem', fontSize: '0.9rem' }}>No items added yet.</div>
               ) : sbCart.map((c, i) => (
                 <div key={i} className="card" style={{ padding: '14px', marginBottom: '8px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
@@ -3352,6 +3389,43 @@ export default function App() {
         </div>
       )}
 
+      {showSbHeldBills && (
+        <div className="modal-overlay" style={{ zIndex: 4000 }}>
+          <div className="modal-content" style={{ maxWidth: '420px', width: '95%' }}>
+            <div className="modal-header">
+              <span>⏸ HELD BILLS (Short)</span>
+              <button style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: '1.5rem' }} onClick={() => setShowSbHeldBills(false)}>✕</button>
+            </div>
+            {sbHeldBills.length === 0 ? (
+              <p style={{ textAlign: 'center', color: '#6c757d' }}>No held bills.</p>
+            ) : (
+              sbHeldBills.map(h => {
+                const total = h.cart.reduce((s, c) => s + c.total, 0);
+                const mins = Math.floor((Date.now() - h.heldAt) / 60000);
+                return (
+                  <div key={h.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: '12px 14px', marginBottom: 10 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                      <div>
+                        {h.customerName && <div style={{ fontWeight: 700, color: '#0a3d62' }}>👤 {h.customerName}</div>}
+                        <div style={{ fontSize: '0.82rem', color: '#6c757d' }}>{h.cart.length} item{h.cart.length !== 1 ? 's' : ''} · {mins < 1 ? 'just now' : `${mins}m ago`}</div>
+                        <div style={{ fontWeight: 700, fontSize: '1.1rem', color: '#16a34a', marginTop: 2 }}>₹{total.toFixed(2)}</div>
+                        <div style={{ fontSize: '0.78rem', color: '#555', marginTop: 3 }}>
+                          {h.cart.slice(0, 3).map(c => c.name).join(', ')}{h.cart.length > 3 ? '...' : ''}
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginLeft: 10 }}>
+                        <button onClick={() => sbResumeBill(h.id)} style={{ background: '#6366f1', color: 'white', border: 'none', borderRadius: 7, padding: '7px 14px', fontWeight: 700, cursor: 'pointer', fontSize: '0.85rem' }}>▶ Resume</button>
+                        <button onClick={() => sbDiscardHeldBill(h.id)} style={{ background: 'transparent', color: '#dc3545', border: '1px solid #dc3545', borderRadius: 7, padding: '5px 14px', fontWeight: 700, cursor: 'pointer', fontSize: '0.85rem' }}>✕ Discard</button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+
       {isScanning && (
         <div className="modal-overlay" style={{ zIndex: 4000 }}>
           <div className="modal-content" style={{ maxWidth: '480px', width: '95%', padding: '14px' }}>
@@ -3421,30 +3495,43 @@ export default function App() {
       )}
 
       {/* Short Billing Modal */}
-      {sbModal && (
-        <div className="modal-overlay">
-          <div className="modal-content">
+      {sbModal && activeTab === 'shortbilling' && (
+        <div className="modal-overlay" style={{ zIndex: 4000, alignItems: 'flex-start', paddingTop: 'max(16px, env(safe-area-inset-top))' }}>
+          <div className="modal-content" style={{ paddingBottom: 24 }}>
             <div className="modal-header">
               <span>{sbModal.isEdit ? 'EDIT ITEM' : 'ADD ITEM'}</span>
               <button style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: '1.2rem' }} onClick={() => setSbModal(null)}>✕</button>
             </div>
-            <div style={{ textAlign: 'center', marginBottom: '12px', fontWeight: 'bold', color: '#0a3d62', fontSize: '1.05rem', fontFamily: '"Noto Sans Devanagari", sans-serif', wordBreak: 'break-word' }}>
-              {sbModal.name.toUpperCase()}
-            </div>
+
+            {/* Item name — always editable */}
+            <div style={{ fontSize: '0.875rem', color: '#6c757d', fontWeight: 'bold', marginBottom: '6px' }}>ITEM NAME</div>
+            <input
+              key={sbModalKeyRef.current}
+              ref={sbNameInputRef}
+              autoFocus
+              type="text"
+              className="modal-input"
+              style={{ fontFamily: '"Noto Sans Devanagari", sans-serif' }}
+              placeholder="Marathi or English..."
+              value={sbModal.name}
+              onChange={(e) => setSbModal({ ...sbModal, name: e.target.value })}
+              onFocus={(e) => setTimeout(() => e.target.scrollIntoView({ behavior: 'smooth', block: 'center' }), 350)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && sbModal.name.trim()) { e.preventDefault(); sbFocusNext(sbQtyInputRef); } }}
+            />
+
             <div style={{ textAlign: 'center', marginBottom: '10px', fontSize: '0.875rem', color: '#6c757d', fontWeight: 'bold' }}>
               QUANTITY
             </div>
             <div style={{ display: 'flex', gap: '10px', marginBottom: '15px' }}>
               <input
                 ref={sbQtyInputRef}
-                autoFocus
                 type="number"
                 inputMode="decimal"
                 className="modal-input"
                 style={{ marginBottom: 0, flexGrow: 1 }}
                 value={isNaN(sbModal.qty) ? "" : sbModal.qty}
-                onFocus={(e) => e.target.select()}
-                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); sbRateInputRef.current?.focus(); sbRateInputRef.current?.select(); } }}
+                onFocus={(e) => { e.target.select(); setTimeout(() => e.target.scrollIntoView({ behavior: 'smooth', block: 'center' }), 350); }}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); sbFocusNext(sbRateInputRef); } }}
                 onChange={(e) => setSbModal({ ...sbModal, qty: Number(e.target.value) })}
               />
               <select
@@ -3467,8 +3554,8 @@ export default function App() {
               ref={sbRateInputRef}
               value={isNaN(sbModal.rate) ? "" : sbModal.rate}
               step="0.01"
-              onFocus={(e) => e.target.select()}
-              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); sbTotalInputRef.current?.focus(); sbTotalInputRef.current?.select(); } }}
+              onFocus={(e) => { e.target.select(); setTimeout(() => e.target.scrollIntoView({ behavior: 'smooth', block: 'center' }), 350); }}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); sbFocusNext(sbTotalInputRef); } }}
               onChange={(e) => setSbModal({ ...sbModal, rate: Number(e.target.value) })}
             />
             <div style={{ textAlign: 'center', marginBottom: '10px', fontSize: '0.875rem', color: '#6c757d', fontWeight: 'bold', marginTop: '15px' }}>
@@ -3481,7 +3568,7 @@ export default function App() {
               ref={sbTotalInputRef}
               value={isNaN(sbModal.qty * sbModal.rate) ? "" : Number((sbModal.qty * sbModal.rate).toFixed(2))}
               step="0.01"
-              onFocus={(e) => e.target.select()}
+              onFocus={(e) => { e.target.select(); setTimeout(() => e.target.scrollIntoView({ behavior: 'smooth', block: 'center' }), 350); }}
               onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addToSbCart(); } }}
               onChange={(e) => {
                 const t = Number(e.target.value);
@@ -3492,8 +3579,13 @@ export default function App() {
               ₹{sbModal.rate.toFixed(2)} × {sbModal.qty} = ₹{(sbModal.qty * sbModal.rate).toFixed(2)}
             </div>
             <button className="modal-btn" onClick={addToSbCart}>
-              {sbModal.isEdit ? 'UPDATE ITEM' : 'ADD TO BILL'}
+              {sbModal.isEdit ? 'UPDATE ITEM' : 'ADD TO BILL ➤'}
             </button>
+            {!sbModal.isEdit && (
+              <div style={{ textAlign: 'center', fontSize: '0.72rem', color: '#9ca3af', marginTop: '10px' }}>
+                Next item opens automatically · press ✕ to stop
+              </div>
+            )}
           </div>
         </div>
       )}
