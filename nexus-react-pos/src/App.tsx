@@ -114,6 +114,7 @@ export default function App() {
   const [showSbHeldBills, setShowSbHeldBills] = useState(false);
   const sbNameInputRef = useRef<HTMLInputElement>(null);
   const sbQtyInputRef = useRef<HTMLInputElement>(null);
+  const sbUnitSelectRef = useRef<HTMLSelectElement>(null);
   const sbRateInputRef = useRef<HTMLInputElement>(null);
   const sbTotalInputRef = useRef<HTMLInputElement>(null);
   const sbModalKeyRef = useRef(0);
@@ -3513,11 +3514,19 @@ export default function App() {
                 style={{ marginBottom: 0, flexGrow: 1 }}
                 value={isNaN(sbModal.qty) ? "" : sbModal.qty}
                 onFocus={(e) => { e.target.select(); setTimeout(() => e.target.scrollIntoView({ behavior: 'smooth', block: 'center' }), 350); }}
-                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); sbFocusNext(sbRateInputRef); } }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    sbUnitSelectRef.current?.focus();
+                    setTimeout(() => sbUnitSelectRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 350);
+                  }
+                }}
                 onChange={(e) => setSbModal({ ...sbModal, qty: Number(e.target.value) })}
               />
               <select
+                ref={sbUnitSelectRef}
                 value={sbModal.unit}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); sbFocusNext(sbRateInputRef); } }}
                 onChange={(e) => {
                   setSbModal({ ...sbModal, unit: e.target.value });
                   setTimeout(() => sbFocusNext(sbRateInputRef), 100);
