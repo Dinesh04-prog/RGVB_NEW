@@ -1565,6 +1565,13 @@ export default function App() {
   };
 
   const printReceiptBt = async (receipt: Receipt) => {
+    // When running inside the Android WebView wrapper, hand the raw receipt JSON
+    // to the native side so Android Canvas + Noto Devanagari renders the bitmap.
+    if ((window as any).AndroidBT) {
+      (window as any).AndroidBT.printBillNative(JSON.stringify(receipt));
+      return;
+    }
+
     if (!btPrinterCharRef.current) {
       alert('Printer not connected.\nOpen the 🖨️ Printer Setup tab in the sidebar.');
       return;

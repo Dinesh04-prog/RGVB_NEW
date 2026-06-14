@@ -65,7 +65,28 @@ class BluetoothPrintManager(private val activity: MainActivity) {
         }.start()
     }
 
-    // ── Write raw bytes ────────────────────────────────────────────────────
+    // ── Native bitmap print (Android Canvas + Noto Devanagari) ───────────────
+
+    fun printBillNative(receiptJson: String) {
+        if (output == null) {
+            toast("No printer connected. Tap 'Connect Printer' first.")
+            return
+        }
+        Thread {
+            try {
+                val json   = org.json.JSONObject(receiptJson)
+                val bytes  = BitmapPrinter.receiptToEscPos(json)
+                output?.write(bytes)
+                output?.flush()
+                toast("Printed successfully")
+            } catch (e: Exception) {
+                toast("Print failed: ${e.message}")
+                handleDisconnect()
+            }
+        }.start()
+    }
+
+    // ── Write raw bytes (fallback for web-side ESC/POS) ────────────────────
 
     fun writeBytes(data: ByteArray) {
         Thread {

@@ -36,6 +36,15 @@ class AndroidBtBridge(private val activity: MainActivity) {
         }
     }
 
+    /** Called by the web app when running in Android WebView — bypasses web rendering pipeline */
+    @JavascriptInterface
+    fun printBillNative(receiptJson: String) {
+        activity.runOnUiThread {
+            android.widget.Toast.makeText(activity, "Printing…", android.widget.Toast.LENGTH_SHORT).show()
+        }
+        btManager.printBillNative(receiptJson)
+    }
+
     @JavascriptInterface
     fun disconnect() {
         btManager.disconnect()
