@@ -106,6 +106,16 @@ export default function App() {
   const [receiptSearch, setReceiptSearch] = useState("");
   const receiptCardRef = useRef<HTMLDivElement>(null);
 
+  // Short Billing
+  const [sbCart, setSbCart] = useState<CartItem[]>([]);
+  const [sbQuery, setSbQuery] = useState("");
+  const [sbIsDictating, setSbIsDictating] = useState(false);
+  const [sbModal, setSbModal] = useState<{ name: string; qty: number; unit: string; rate: number; isEdit?: boolean; editIndex?: number } | null>(null);
+  const sbQtyInputRef = useRef<HTMLInputElement>(null);
+  const sbRateInputRef = useRef<HTMLInputElement>(null);
+  const sbTotalInputRef = useRef<HTMLInputElement>(null);
+  const [isShortBillMode, setIsShortBillMode] = useState(false);
+
   // Bluetooth Printer
   const [btStatus, setBtStatus] = useState<'idle'|'connecting'|'connected'|'error'>('idle');
   const [btDeviceName, setBtDeviceName] = useState('');
@@ -927,6 +937,7 @@ export default function App() {
       const billNo = await getNextBillNumber();
       const receipt = await saveSale(cart, cartTotal, customerName, customerPhone, billNo);
       setLastReceipt(receipt);
+      setIsShortBillMode(false);
       setCart([]);
       setCustomerName("");
       setCustomerPhone("");
@@ -935,6 +946,71 @@ export default function App() {
       console.error(error);
       alert("Checkout failed. Check console.");
     }
+  };
+
+  const sbCheckout = async () => {
+    if (sbCart.length === 0) return;
+    const total = sbCart.reduce((s, c) => s + c.total, 0);
+    try {
+      const billNo = await getNextBillNumber();
+      const receipt = await saveSale(sbCart, total, customerName, customerPhone, billNo);
+      setLastReceipt(receipt);
+      setSbCart([]);
+      setCustomerName("");
+      setCustomerPhone("");
+      setIsShortBillMode(true);
+      setReceiptShareOpen(true);
+    } catch (error) {
+      console.error(error);
+      alert("Checkout failed.");
+    }
+  };
+
+  const openSbModal = (name: string) => {
+    if (!name.trim()) return;
+    setSbModal({ name: name.trim(), qty: 1, unit: 'pcs', rate: 0 });
+  };
+
+  const addToSbCart = () => {
+    if (!sbModal) return;
+    const { name, qty, unit, rate, isEdit, editIndex } = sbModal;
+    if (!qty || qty <= 0) { alert('Enter valid quantity'); return; }
+    const total = qty * rate;
+    const item: CartItem = { id: `sb-${Date.now()}`, name, unit, qty, rate, total, cartUnit: unit, multiplier: 1 };
+    if (isEdit && editIndex !== undefined) {
+      setSbCart(prev => prev.map((c, i) => i === editIndex ? item : c));
+    } else {
+      setSbCart(prev => [...prev, item]);
+    }
+    setSbModal(null);
+    setSbQuery("");
+  };
+
+  const editSbCartItem = (index: number) => {
+    const c = sbCart[index];
+    setSbModal({ name: c.name, qty: c.qty, unit: c.unit, rate: c.rate, isEdit: true, editIndex: index });
+  };
+
+  const removeSbCartItem = (index: number) => {
+    setSbCart(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleSbVoice = () => {
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) { alert('Voice not supported in this browser'); return; }
+    if (sbIsDictating) { setSbIsDictating(false); return; }
+    setSbIsDictating(true);
+    const rec = new SR();
+    rec.lang = 'mr-IN';
+    rec.interimResults = false;
+    rec.maxAlternatives = 1;
+    rec.onend = () => setSbIsDictating(false);
+    rec.onerror = () => setSbIsDictating(false);
+    rec.onresult = (event: any) => {
+      setSbQuery(event.results[0][0].transcript);
+      setSbIsDictating(false);
+    };
+    rec.start();
   };
 
   const generateReceiptText = (r: Receipt) => {
@@ -1283,16 +1359,12 @@ export default function App() {
     console.debug('[btSend] finished');
   };
 
-  const buildEscPos = (r: Receipt, rasterProvider?: (item: any, index: number) => Uint8Array | null, logoRaster?: Uint8Array): Uint8Array => {
-    // 80 mm paper — 40 printable chars per line at standard font (203 DPI).
-    // Column layout matches the on-screen receipt: ITEM | QTY | RATE | AMT
-    //   ITEM 18 chars (left) | QTY 5 (right) | RATE 8 (right) | AMT 9 (right) = 40
-    //
-    // Padding uses Unicode code-point counting ([...s].length) so Devanagari
-    // characters (1 code point each) align correctly when the printer is in
-    // UTF-8 mode (switched on by ESC t 0x52 below).
+  const buildEscPos = (r: Receipt, hideRate = false, rasterProvider?: (item: any, index: number) => Uint8Array | null, logoRaster?: Uint8Array): Uint8Array => {
     const W = 48;
-    const C1 = 19, C2 = 10, C3 = 9, C4 = 9; // column widths, must sum to W
+    const C1 = hideRate ? 29 : 19;
+    const C2 = hideRate ? 10 : 10;
+    const C3 = hideRate ? 0  : 9;
+    const C4 = hideRate ? 9  : 9;
 
     const enc = new TextEncoder();
     const buf: number[] = [];
@@ -1344,7 +1416,10 @@ export default function App() {
 
     // ── Column headers ───────────────────────────────────────
     b(0x1B, 0x45, 0x01);  // bold on
-    str(pL('ITEM', C1) + pR('QTY', C2) + pR('RATE', C3) + pR('AMT', C4)); nl();
+    str(hideRate
+      ? pL('ITEM', C1) + pR('QTY', C2) + pR('AMT', C4)
+      : pL('ITEM', C1) + pR('QTY', C2) + pR('RATE', C3) + pR('AMT', C4)
+    ); nl();
     b(0x1B, 0x45, 0x00);  // bold off
     str('-'.repeat(W)); nl();
 
@@ -1374,7 +1449,10 @@ export default function App() {
         }
       }
 
-      str(nameCell + pR(qtyStr, C2) + pR(rateStr, C3) + pR(amtStr, C4)); nl();
+      str(hideRate
+        ? nameCell + pR(qtyStr, C2) + pR(amtStr, C4)
+        : nameCell + pR(qtyStr, C2) + pR(rateStr, C3) + pR(amtStr, C4)
+      ); nl();
     }
 
 
@@ -1587,7 +1665,7 @@ export default function App() {
       || isBitmapMarker(receipt.customerName || '');
 
     if (!markerExists) {
-      try { await btSend(buildEscPos(receipt, undefined, logoRaster)); }
+      try { await btSend(buildEscPos(receipt, isShortBillMode, undefined, logoRaster)); }
       catch (err: any) { alert(`Print failed: ${err.message}`); }
       return;
     }
@@ -1609,13 +1687,14 @@ export default function App() {
     };
 
     try {
-      await btSend(buildEscPos(receipt, rasterProvider, logoRaster));
+      await btSend(buildEscPos(receipt, isShortBillMode, rasterProvider, logoRaster));
     } catch (err: any) {
       alert(`Print failed: ${err.message}`);
     }
   };
 
   const cartTotal = cart.reduce((sum, item) => sum + item.total, 0);
+  const sbCartTotal = sbCart.reduce((sum, item) => sum + item.total, 0);
 
   // Stock filtering — substring first, Fuse fuzzy fallback on miss
   const filteredStock = (() => {
@@ -1955,6 +2034,9 @@ export default function App() {
             .receipt-table .col-qty   { width: 14%; text-align: center; }
             .receipt-table .col-rate  { width: 20%; text-align: right; }
             .receipt-table .col-amt   { width: 22%; text-align: right; }
+            #printReceiptArea.short-bill .col-item { width: 55%; }
+            #printReceiptArea.short-bill .col-qty  { width: 15%; }
+            #printReceiptArea.short-bill .col-amt  { width: 30%; }
             .rp-total-row { display: flex; justify-content: space-between; font-size: 11pt; font-weight: bold; padding: 1.5mm 0; letter-spacing: 0.5px; }
             .rp-items-count { font-size: 7.5pt; text-align: right; color: #333; }
             .rp-footer { font-size: 7.5pt; text-align: center; margin-top: 3mm; }
@@ -1979,9 +2061,9 @@ export default function App() {
           <button onClick={() => setSidebarOpen(false)} style={{ background: 'transparent', border: 'none', color: 'white', fontSize: '1.3rem', cursor: 'pointer', lineHeight: 1, padding: 4 }}>✕</button>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
-          {(['billing','inventory','reports','customers','receipts','printer'] as const).map(tab => {
+          {(['billing','shortbilling','inventory','reports','customers','receipts','printer'] as const).map(tab => {
             const labels: Record<string, string> = {
-              billing: '📝 BILLING', inventory: '📦 INVENTORY', reports: '📊 REPORTS',
+              billing: '📝 BILLING', shortbilling: '📋 SHORT BILL', inventory: '📦 INVENTORY', reports: '📊 REPORTS',
               customers: '👥 CUSTOMERS', receipts: '🧾 RECEIPTS', printer: '🖨️ PRINTER SETUP',
             };
             return (
@@ -2270,6 +2352,125 @@ export default function App() {
           </div>
         )}
 
+        {activeTab === 'shortbilling' && (
+          <div>
+            <div className="billing-header">
+              <h2 style={{ fontWeight: 'bold', margin: 0 }}>Short Bill</h2>
+              <button
+                onClick={() => setIsCustomerModalOpen(true)}
+                className={`customer-btn billing-action-btn${customerName ? ' active-cust' : ''}`}
+              >
+                👤 <span className="btn-text">CUSTOMER {customerName ? `(${customerName})` : ''}</span>
+              </button>
+            </div>
+
+            <div className="card">
+              <div className="search-container">
+                <div className="search-inner-row">
+                  <input
+                    type="text"
+                    id="sbNameInput"
+                    placeholder="Item name in Marathi or English..."
+                    value={sbQuery}
+                    autoComplete="off"
+                    style={{ height: 52, borderRadius: 12, border: '2px solid #e1e8ed', paddingLeft: 15, fontSize: '1.1rem', flex: 1, minWidth: 0, outline: 'none' }}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (!imeEnabled) { setSbQuery(val); return; }
+                      if (val.endsWith(" ")) {
+                        const translated = translateHinglishToMarathi(val.trim());
+                        setSbQuery(translated + " ");
+                      } else {
+                        setSbQuery(val);
+                      }
+                    }}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && sbQuery.trim()) openSbModal(sbQuery); }}
+                  />
+                  <button
+                    onClick={() => setImeEnabled(!imeEnabled)}
+                    className="ime-btn"
+                    style={{ background: imeEnabled ? '#28a745' : '#ccc' }}>
+                    {imeEnabled ? "अ" : "A"}
+                  </button>
+                  <button className={`mic-btn ${sbIsDictating ? 'mic-active' : ''}`} onClick={handleSbVoice}>🎙️</button>
+                  <button
+                    onClick={() => openSbModal(sbQuery)}
+                    disabled={!sbQuery.trim()}
+                    style={{ height: 52, borderRadius: 12, background: sbQuery.trim() ? '#0d6efd' : '#ccc', color: 'white', border: 'none', padding: '0 20px', fontWeight: 'bold', cursor: sbQuery.trim() ? 'pointer' : 'not-allowed', flexShrink: 0, fontSize: '0.95rem' }}
+                  >
+                    + ADD
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="total-bar shadow-lg">
+              <h3 style={{ margin: 0, fontWeight: 'bold' }}>TOTAL: ₹{sbCartTotal.toFixed(2)}</h3>
+              <button className="checkout-btn" onClick={sbCheckout} disabled={sbCart.length === 0} style={{ opacity: sbCart.length === 0 ? 0.5 : 1 }}>CHECKOUT ➤</button>
+            </div>
+
+            {/* Desktop cart */}
+            <div className="card desktop-cart-table">
+              {sbCart.length === 0 ? (
+                <div style={{ textAlign: 'center', color: '#9ca3af', padding: '2rem', fontSize: '0.95rem' }}>No items yet. Type an item name above and press ADD.</div>
+              ) : (
+                <div className="table-container">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>Item</th>
+                        <th style={{ textAlign: 'center' }}>Qty</th>
+                        <th style={{ textAlign: 'center' }}>Rate</th>
+                        <th style={{ textAlign: 'center' }}>Total</th>
+                        <th style={{ textAlign: 'center' }}>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sbCart.map((c, i) => (
+                        <tr key={i}>
+                          <td style={{ fontWeight: 'bold', cursor: 'pointer', color: '#0a3d62' }} onClick={() => editSbCartItem(i)}>{c.name.toUpperCase()} <small style={{ color: '#6c757d' }}>({c.unit})</small></td>
+                          <td style={{ textAlign: 'center' }}>{c.qty} {c.unit}</td>
+                          <td style={{ textAlign: 'center' }}>₹{c.rate.toFixed(2)}</td>
+                          <td style={{ textAlign: 'center', fontWeight: 'bold', color: '#0d6efd' }}>₹{c.total.toFixed(2)}</td>
+                          <td style={{ textAlign: 'center' }}>
+                            <button className="btn-action danger" onClick={() => removeSbCartItem(i)}>✕</button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* Mobile cart */}
+            <div className="mobile-cart-card">
+              {sbCart.length === 0 ? (
+                <div className="card" style={{ textAlign: 'center', color: '#9ca3af', padding: '2rem', fontSize: '0.9rem' }}>No items yet.</div>
+              ) : sbCart.map((c, i) => (
+                <div key={i} className="card" style={{ padding: '14px', marginBottom: '8px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+                    <div style={{ flex: 1, cursor: 'pointer', minWidth: 0 }} onClick={() => editSbCartItem(i)}>
+                      <div style={{ fontWeight: 'bold', fontSize: '1rem', color: '#0a3d62', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {c.name.toUpperCase()} <small style={{ color: '#6c757d', fontWeight: 'normal' }}>({c.unit})</small>
+                      </div>
+                      <div style={{ display: 'flex', gap: '12px', marginTop: '5px', fontSize: '0.88rem', color: '#555', flexWrap: 'wrap' }}>
+                        <span>Qty: <b>{c.qty} {c.unit}</b></span>
+                        <span>Rate: <b>₹{c.rate.toFixed(2)}</b></span>
+                      </div>
+                      <div style={{ fontSize: '0.7rem', color: '#9ca3af', marginTop: 3 }}>✏ tap to edit</div>
+                    </div>
+                    <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                      <div style={{ fontWeight: 'bold', color: '#0d6efd', fontSize: '1.15rem', marginBottom: 6 }}>₹{c.total.toFixed(2)}</div>
+                      <button className="btn-action danger" onClick={() => removeSbCartItem(i)} style={{ padding: '8px 14px', fontSize: '0.9rem', borderRadius: 6 }}>✕</button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {activeTab === 'inventory' && (
           <div>
             <h2 style={{ fontWeight: 'bold', marginBottom: '1rem' }}>Inventory</h2>
@@ -2439,7 +2640,7 @@ export default function App() {
               {viewingReceipt && (
                 <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                   <button
-                    onClick={() => { setLastReceipt(viewingReceipt); setViewingReceipt(null); setReceiptShareOpen(true); }}
+                    onClick={() => { setLastReceipt(viewingReceipt); setViewingReceipt(null); setIsShortBillMode(false); setReceiptShareOpen(true); }}
                     style={{ background: '#25D366', color: 'white', border: 'none', borderRadius: '8px', padding: '8px 14px', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.85rem' }}
                   >
                     📲 Share Again
@@ -3219,6 +3420,84 @@ export default function App() {
         </div>
       )}
 
+      {/* Short Billing Modal */}
+      {sbModal && (
+        <div className="modal-overlay">
+          <div className="modal-content">
+            <div className="modal-header">
+              <span>{sbModal.isEdit ? 'EDIT ITEM' : 'ADD ITEM'}</span>
+              <button style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: '1.2rem' }} onClick={() => setSbModal(null)}>✕</button>
+            </div>
+            <div style={{ textAlign: 'center', marginBottom: '12px', fontWeight: 'bold', color: '#0a3d62', fontSize: '1.05rem', fontFamily: '"Noto Sans Devanagari", sans-serif', wordBreak: 'break-word' }}>
+              {sbModal.name.toUpperCase()}
+            </div>
+            <div style={{ textAlign: 'center', marginBottom: '10px', fontSize: '0.875rem', color: '#6c757d', fontWeight: 'bold' }}>
+              QUANTITY
+            </div>
+            <div style={{ display: 'flex', gap: '10px', marginBottom: '15px' }}>
+              <input
+                ref={sbQtyInputRef}
+                autoFocus
+                type="number"
+                inputMode="decimal"
+                className="modal-input"
+                style={{ marginBottom: 0, flexGrow: 1 }}
+                value={isNaN(sbModal.qty) ? "" : sbModal.qty}
+                onFocus={(e) => e.target.select()}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); sbRateInputRef.current?.focus(); sbRateInputRef.current?.select(); } }}
+                onChange={(e) => setSbModal({ ...sbModal, qty: Number(e.target.value) })}
+              />
+              <select
+                value={sbModal.unit}
+                onChange={(e) => setSbModal({ ...sbModal, unit: e.target.value })}
+                style={{ padding: '10px', borderRadius: '8px', border: '1px solid #ccc', fontWeight: 'bold' }}
+              >
+                {['pcs', 'kg', 'g', 'L', 'ml', 'packet', 'box', 'bag', 'dozen', 'mal'].map(u => (
+                  <option key={u} value={u}>{u}</option>
+                ))}
+              </select>
+            </div>
+            <div style={{ textAlign: 'center', marginBottom: '10px', fontSize: '0.875rem', color: '#6c757d', fontWeight: 'bold' }}>
+              RATE (per {sbModal.unit})
+            </div>
+            <input
+              type="number"
+              inputMode="decimal"
+              className="modal-input"
+              ref={sbRateInputRef}
+              value={isNaN(sbModal.rate) ? "" : sbModal.rate}
+              step="0.01"
+              onFocus={(e) => e.target.select()}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); sbTotalInputRef.current?.focus(); sbTotalInputRef.current?.select(); } }}
+              onChange={(e) => setSbModal({ ...sbModal, rate: Number(e.target.value) })}
+            />
+            <div style={{ textAlign: 'center', marginBottom: '10px', fontSize: '0.875rem', color: '#6c757d', fontWeight: 'bold', marginTop: '15px' }}>
+              TOTAL AMOUNT
+            </div>
+            <input
+              type="number"
+              inputMode="decimal"
+              className="modal-input"
+              ref={sbTotalInputRef}
+              value={isNaN(sbModal.qty * sbModal.rate) ? "" : Number((sbModal.qty * sbModal.rate).toFixed(2))}
+              step="0.01"
+              onFocus={(e) => e.target.select()}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addToSbCart(); } }}
+              onChange={(e) => {
+                const t = Number(e.target.value);
+                if (sbModal.qty > 0) setSbModal({ ...sbModal, rate: t / sbModal.qty });
+              }}
+            />
+            <div style={{ textAlign: 'center', fontSize: '0.78rem', color: '#16A34A', fontWeight: 'bold', marginBottom: '15px', marginTop: '-8px' }}>
+              ₹{sbModal.rate.toFixed(2)} × {sbModal.qty} = ₹{(sbModal.qty * sbModal.rate).toFixed(2)}
+            </div>
+            <button className="modal-btn" onClick={addToSbCart}>
+              {sbModal.isEdit ? 'UPDATE ITEM' : 'ADD TO BILL'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Receipt Share Modal */}
       {receiptShareOpen && lastReceipt && (
         <div className="modal-overlay" style={{ zIndex: 5000 }}>
@@ -3244,10 +3523,10 @@ export default function App() {
               <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid #000', fontSize: '9px' }}>
-                    <th style={{ textAlign: 'left', padding: '2px 1px', width: '44%' }}>ITEM</th>
-                    <th style={{ textAlign: 'center', padding: '2px 1px', width: '14%' }}>QTY</th>
-                    <th style={{ textAlign: 'right', padding: '2px 1px', width: '20%' }}>RATE</th>
-                    <th style={{ textAlign: 'right', padding: '2px 1px', width: '22%' }}>AMT</th>
+                    <th style={{ textAlign: 'left', padding: '2px 1px', width: isShortBillMode ? '55%' : '44%' }}>ITEM</th>
+                    <th style={{ textAlign: 'center', padding: '2px 1px', width: isShortBillMode ? '15%' : '14%' }}>QTY</th>
+                    {!isShortBillMode && <th style={{ textAlign: 'right', padding: '2px 1px', width: '20%' }}>RATE</th>}
+                    <th style={{ textAlign: 'right', padding: '2px 1px', width: isShortBillMode ? '30%' : '22%' }}>AMT</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -3255,7 +3534,7 @@ export default function App() {
                     <tr key={idx} style={{ borderBottom: '1px dashed #ccc', fontSize: '10px' }}>
                       <td style={{ padding: '3px 1px', wordBreak: 'break-word' }}>{item.name}</td>
                       <td style={{ textAlign: 'center', padding: '3px 1px' }}>{item.qty}{item.cartUnit && item.cartUnit !== item.unit ? item.cartUnit : ''}</td>
-                      <td style={{ textAlign: 'right', padding: '3px 1px' }}>{(item.rate * (item.multiplier || 1)).toFixed(2)}</td>
+                      {!isShortBillMode && <td style={{ textAlign: 'right', padding: '3px 1px' }}>{(item.rate * (item.multiplier || 1)).toFixed(2)}</td>}
                       <td style={{ textAlign: 'right', padding: '3px 1px' }}>{item.total.toFixed(2)}</td>
                     </tr>
                   ))}
@@ -3330,7 +3609,7 @@ export default function App() {
       )}
 
       {/* Hidden Print Wrapper — optimised for 80mm thermal (PosBox / similar) */}
-      <div id="printReceiptArea">
+      <div id="printReceiptArea" className={isShortBillMode ? 'short-bill' : ''}>
         {lastReceipt && (
           <>
             {/* Store header */}
@@ -3351,7 +3630,7 @@ export default function App() {
                 <tr>
                   <th className="col-item">Item</th>
                   <th className="col-qty">Qty</th>
-                  <th className="col-rate">Rate</th>
+                  {!isShortBillMode && <th className="col-rate">Rate</th>}
                   <th className="col-amt">Amt</th>
                 </tr>
               </thead>
@@ -3360,7 +3639,7 @@ export default function App() {
                   <tr key={idx}>
                     <td className="col-item">{item.name}</td>
                     <td className="col-qty">{item.qty}{item.cartUnit && item.cartUnit !== item.unit ? item.cartUnit : ''}</td>
-                    <td className="col-rate">{(item.rate * (item.multiplier || 1)).toFixed(2)}</td>
+                    {!isShortBillMode && <td className="col-rate">{(item.rate * (item.multiplier || 1)).toFixed(2)}</td>}
                     <td className="col-amt">{item.total.toFixed(2)}</td>
                   </tr>
                 ))}
