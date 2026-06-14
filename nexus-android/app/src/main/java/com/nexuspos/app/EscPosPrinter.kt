@@ -79,20 +79,12 @@ object EscPosPrinter {
             val unit = item.optString("cartUnit", item.optString("unit", ""))
 
             val displayName = "${i + 1}. $name"
+            val numbersText = "${fmtN(qty)} $unit  ${fmtN(rate)}  ${fmtN(amt)}"
             w(ALIGN_LEFT)
 
-            if (hasDevanagari(name)) {
-                // Render as a tiny per-line bitmap so the printer's built-in
-                // Android Noto Devanagari font draws it — ~2 KB per line
-                w(renderDevanagariLine(displayName, 26f))
-            } else {
-                line(displayName)
-            }
-
-            // Numbers are always ASCII → text mode
-            w(ALIGN_RIGHT)
-            line("${fmtN(qty)} $unit   ${fmtN(rate)}   ${fmtN(amt)}")
-            w(ALIGN_LEFT)
+            // Render entire row (name + qty/rate/amt) as one bitmap line so
+            // Devanagari name and numbers sit on the same horizontal line.
+            w(renderItemRow(displayName, numbersText, 26f))
         }
         divider()
 
@@ -114,19 +106,24 @@ object EscPosPrinter {
 
     // ── Devanagari → inline ESC/POS raster ───────────────────────────────────
 
-    private fun hasDevanagari(text: String): Boolean =
-        text.any { it.code in 0x0900..0x097F }
+    // Draws name (left) and qty/rate/amt (right) on one bitmap line.
+    private fun renderItemRow(leftText: String, rightText: String, fontSize: Float): ByteArray {
+        val lineH = (fontSize * 1.6f).toInt().coerceAtLeast(40)
+        val bm    = Bitmap.createBitmap(PAPER_W, lineH, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bm)
+        canvas.drawColor(Color.WHITE)
 
-    private fun renderDevanagariLine(text: String, fontSize: Float): ByteArray {
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color    = Color.BLACK
             textSize = fontSize
         }
-        val lineH = (fontSize * 1.6f).toInt().coerceAtLeast(40)
-        val bm = Bitmap.createBitmap(PAPER_W, lineH, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bm)
-        canvas.drawColor(Color.WHITE)
-        canvas.drawText(text, 4f, fontSize + 6f, paint)
+        val baseline = fontSize + 6f
+
+        paint.textAlign = Paint.Align.LEFT
+        canvas.drawText(leftText, 4f, baseline, paint)
+
+        paint.textAlign = Paint.Align.RIGHT
+        canvas.drawText(rightText, PAPER_W - 4f, baseline, paint)
 
         return bitmapLineToEscPos(bm).also { bm.recycle() }
     }
