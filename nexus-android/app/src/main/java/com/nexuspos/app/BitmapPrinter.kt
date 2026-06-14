@@ -18,9 +18,12 @@ object BitmapPrinter {
     private const val LINE_GAP = 6f
 
     // Fixed right-edge X for each numeric column
-    private const val COL_QTY  = 320f
-    private const val COL_RATE = 430f
+    private const val COL_QTY  = 336f
+    private const val COL_RATE = 444f
     private const val COL_AMT  = PAPER_W - MARGIN  // 558f
+
+    // Max pixel width for item name text (name spans 18→228px; qty value starts at ~261px)
+    private const val NAME_MAX_W = 210f
 
     // ── Public entry point ────────────────────────────────────────────────────
 
@@ -90,8 +93,8 @@ object BitmapPrinter {
             val amt   = item.optDouble("total", 0.0)
             val unit  = item.optString("cartUnit", item.optString("unit", ""))
 
-            // Wrap name within space left of the Qty column
-            val nameMaxW = COL_QTY - MARGIN - 10f
+            // Wrap name within the fixed name column (18→228px); clear of qty column
+            val nameMaxW = NAME_MAX_W
             normal.textSize  = 22f
             normal.textAlign = Paint.Align.LEFT
             val nameLines = wrapText(name, normal, nameMaxW)
