@@ -23,13 +23,13 @@ object EscPosPrinter {
 
     // Fixed right-edge X for each numeric column (pixels on 576px paper)
     private const val MARGIN_PX  = 4f
-    private const val COL_QTY    = 350f   // Qty right edge
-    private const val COL_RATE   = 444f   // Rate right edge (full bill only)
-    private const val COL_AMT    = 555f   // Amt right edge
+    private const val COL_QTY    = 395f   // Qty right edge
+    private const val COL_RATE   = 475f   // Rate right edge (full bill only)
+    private const val COL_AMT    = 555f   // Amt right edge (fixed)
     private const val NAME_MAX_W = 210f   // max px width for name text (4→214px)
 
-    // Short bill has no Rate column — Qty shifts right to fill the space
-    private const val SB_COL_QTY = 415f
+    // Short bill has no Rate column
+    private const val SB_COL_QTY = 390f
 
     // ── ESC/POS commands ──────────────────────────────────────────────────────
     private val INIT        = cmd(0x1B, 0x40)
