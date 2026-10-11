@@ -13,6 +13,9 @@ import html2canvas from 'html2canvas';
 import { saveSale, getSalesHistory } from "./lib/db";
 import type { CartItem, Receipt } from "./lib/db";
 import { translateHinglishToMarathi, transliterateDevanagariToLatin, normalizeForSearch, HINGLISH_TO_MARATHI, parseUserQuery, scoreCandidate } from "./lib/phonetic";
+import { makeSearchKey } from "./lib/itemNames";
+import { isAndroidScanAvailable, startProductScan } from "./lib/androidScan";
+import PhotoAddItem from "./components/PhotoAddItem";
 
 interface InventoryItem {
   id: string;
@@ -28,6 +31,9 @@ interface InventoryItem {
   purchase_price?: number;
   barcode?: string;
   unit_rates?: Record<string, number>; // per-unit custom rates e.g. { bag: 550, kg: 120, "250g": 15 }
+  net_qty?: string;      // pack size, e.g. "250 g" (photo add)
+  expiry_date?: string;  // ISO yyyy-MM-dd
+  mfg_date?: string;     // ISO yyyy-MM-dd
 }
 
 const getUnitMultiplier = (targetUnit: string, baseUnit: string) => {
@@ -141,6 +147,7 @@ export default function App() {
       { name: "brand",        weight: 1   },
       { name: "id",           weight: 0.5 },
       { name: "barcode",      weight: 0.5 },
+      { name: "net_qty",      weight: 0.5 },
     ],
     threshold: 0.45, ignoreLocation: true, distance: 300,
     minMatchCharLength: 2, shouldSort: true, includeScore: true,
@@ -515,19 +522,32 @@ export default function App() {
     } catch (_) {}
   };
 
-  const saveInventoryEdit = async () => {
-    if (!inventoryEditItem) return;
-    const exists = inventory.find(i => i.id === inventoryEditItem.id);
+  // Single write path for inventory add/edit (manual form and photo add):
+  // local state → IndexedDB cache → Fuse index → Firestore (best-effort) → xlsx auto-sync.
+  const upsertInventoryItem = async (item: InventoryItem) => {
+    const exists = inventory.find(i => i.id === item.id);
     const newInv = exists
-      ? inventory.map(i => i.id === inventoryEditItem.id ? inventoryEditItem : i)
-      : [...inventory, inventoryEditItem];
+      ? inventory.map(i => i.id === item.id ? item : i)
+      : [...inventory, item];
     // Always update local state immediately so the UI reflects the change
     setInventory(newInv);
     await localforage.setItem('custom_inventory', newInv);
-    setFuse(new Fuse(newInv, { keys: [{ name: "search_key", weight: 3 }, { name: "name_marathi", weight: 1.5 }, { name: "name", weight: 1 }, { name: "name_eng", weight: 1 }, { name: "brand", weight: 1 }], threshold: 0.45, ignoreLocation: true, distance: 300, minMatchCharLength: 2, shouldSort: true, includeScore: true }));
+    setFuse(new Fuse(newInv, { keys: [{ name: "search_key", weight: 3 }, { name: "name_marathi", weight: 1.5 }, { name: "name", weight: 1 }, { name: "name_eng", weight: 1 }, { name: "brand", weight: 1 }, { name: "net_qty", weight: 0.5 }], threshold: 0.45, ignoreLocation: true, distance: 300, minMatchCharLength: 2, shouldSort: true, includeScore: true }));
     // Best-effort Firebase sync — never block the save on network
-    try { await saveInventoryItemToCloud(inventoryEditItem); } catch (err) { console.error("Firebase sync failed:", err); }
+    try { await saveInventoryItemToCloud(item); } catch (err) { console.error("Firebase sync failed:", err); }
     await syncInventoryToXlsx(newInv);
+  };
+
+  const saveInventoryEdit = async () => {
+    if (!inventoryEditItem) return;
+    let item = inventoryEditItem;
+    // New items get the shop's short code (4 Latin + 4 Devanagari chars) if none was set
+    if (!item.search_key && !inventory.some(i => i.id === item.id)) {
+      const mr = item.name_marathi || item.name || '';
+      const en = item.name_eng || (/[ऀ-ॿ]/.test(mr) ? transliterateDevanagariToLatin(mr) : mr);
+      if (mr.trim()) item = { ...item, search_key: makeSearchKey(en, mr) };
+    }
+    await upsertInventoryItem(item);
     setInventoryEditItem(null);
   };
 
@@ -548,7 +568,7 @@ export default function App() {
     // Always update local state immediately
     setInventory(newInv);
     await localforage.setItem('custom_inventory', newInv);
-    setFuse(new Fuse(newInv, { keys: [{ name: "search_key", weight: 3 }, { name: "name_marathi", weight: 1.5 }, { name: "name", weight: 1 }, { name: "name_eng", weight: 1 }, { name: "brand", weight: 1 }], threshold: 0.45, ignoreLocation: true, distance: 300, minMatchCharLength: 2, shouldSort: true, includeScore: true }));
+    setFuse(new Fuse(newInv, { keys: [{ name: "search_key", weight: 3 }, { name: "name_marathi", weight: 1.5 }, { name: "name", weight: 1 }, { name: "name_eng", weight: 1 }, { name: "brand", weight: 1 }, { name: "net_qty", weight: 0.5 }], threshold: 0.45, ignoreLocation: true, distance: 300, minMatchCharLength: 2, shouldSort: true, includeScore: true }));
     // Best-effort Firebase sync
     try { await removeInventoryItemFromCloud(inventoryEditItem.id); } catch (err) { console.error("Firebase sync failed:", err); }
     await syncInventoryToXlsx(newInv);
@@ -1914,7 +1934,7 @@ export default function App() {
           <div style={{ fontWeight: 'bold', fontSize: '1.12rem', fontFamily: '"Noto Sans Devanagari", sans-serif', lineHeight: 1.3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: '#1C1917' }}>{marathiName}</div>
           {engName && <div style={{ fontSize: '0.82rem', color: '#57534E', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{engName}</div>}
           {s.brand && <div style={{ color: '#0a3d62', fontWeight: 'bold', fontSize: '0.88rem' }}>{s.brand}</div>}
-          <div style={{ color: '#9ca3af', fontSize: '0.68rem', marginTop: '1px' }}>({s.unit}) · {s.id}</div>
+          <div style={{ color: '#9ca3af', fontSize: '0.68rem', marginTop: '1px' }}>({s.unit}){s.net_qty ? ` · ${s.net_qty}` : ''} · {s.id}</div>
         </div>
         <div className="kirana-vals">
           <div style={{ fontWeight: 'bold', color: '#DC2626', fontSize: '0.88rem', textDecoration: hasDiscount ? 'line-through' : 'none' }}>
@@ -2539,6 +2559,14 @@ export default function App() {
                 >
                   ➕ ADD NEW ITEM
                 </button>
+                {isAndroidScanAvailable() && (
+                  <button
+                    onClick={() => startProductScan()}
+                    style={{ background: '#F97316', color: 'white', border: 'none', padding: '10px 16px', minHeight: '48px', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer', whiteSpace: 'nowrap', fontSize: '0.95rem', flex: '1 1 100%' }}
+                  >
+                    📷 Photo se item add karo
+                  </button>
+                )}
               </div>
               {uploadStatus && (
                 <div style={{
@@ -3040,6 +3068,8 @@ export default function App() {
         </div>
       )}
 
+      <PhotoAddItem inventory={inventory} onSave={upsertInventoryItem} onOpenExisting={setInventoryEditItem} />
+
       {inventoryEditItem && (
         <div className="modal-overlay">
           <div className="modal-content" style={{ padding: '15px' }}>
@@ -3152,7 +3182,7 @@ export default function App() {
 
             <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
               <div style={{ flex: 1 }}>
-                <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#6c757d', marginBottom: '2px', display: 'block' }}>PURCHASE RATE</label>
+                <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#6c757d', marginBottom: '2px', display: 'block' }}>MRP</label>
                 <input
                   type="number"
                   inputMode="decimal"

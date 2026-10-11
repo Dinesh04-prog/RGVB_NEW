@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:names": "rolldown scripts/test-item-names.ts -o node_modules/.tmp/test-item-names.mjs -p node -f esm && node node_modules/.tmp/test-item-names.mjs"
   },
   "dependencies": {
     "@react-oauth/google": "^0.13.4",

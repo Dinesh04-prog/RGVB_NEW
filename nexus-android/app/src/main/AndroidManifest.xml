@@ -34,6 +34,13 @@
             </intent-filter>
         </activity>
 
+        <!-- Add item from photos: front + back photo, ML Kit OCR/barcode -->
+        <activity
+            android:name=".ProductScanActivity"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.AppCompat.NoActionBar" />
+
     </application>
 
 </manifest>

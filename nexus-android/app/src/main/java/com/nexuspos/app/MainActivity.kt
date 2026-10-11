@@ -2,6 +2,7 @@ package com.nexuspos.app
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -10,16 +11,24 @@ import android.util.Log
 import android.view.ViewGroup
 import android.webkit.*
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewClientCompat
+import org.json.JSONObject
 
 class MainActivity : AppCompatActivity() {
 
     lateinit var webView: WebView
     lateinit var btManager: BluetoothPrintManager
+
+    // Registered before onStart, so a result also reaches a MainActivity recreated after low-memory kill
+    private val productScanLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
+        if (res.resultCode == RESULT_OK) deliverScanResult()
+        else webView.evaluateJavascript("window.onProductScanCancel && window.onProductScanCancel()", null)
+    }
 
     companion object {
         private const val TAG = "NexusPOS"
@@ -68,6 +77,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         webView.addJavascriptInterface(AndroidBtBridge(this), "AndroidBT")
+        webView.addJavascriptInterface(AndroidScanBridge(this), "AndroidScan")
 
         webView.webViewClient = object : WebViewClientCompat() {
 
@@ -243,6 +253,30 @@ class MainActivity : AppCompatActivity() {
 })();
         """.trimIndent()
         webView.evaluateJavascript("javascript:$js", null)
+    }
+
+    // ── Add item from photos ─────────────────────────────────────────────────
+
+    fun launchProductScan() {
+        ProductScanActivity.resultFile(this).delete()
+        productScanLauncher.launch(Intent(this, ProductScanActivity::class.java))
+    }
+
+    /** Hand the scan result to the web app; if the page is not ready, keep the file for takePendingScanResult(). */
+    private fun deliverScanResult() {
+        val file = ProductScanActivity.resultFile(this)
+        if (!file.exists()) return
+        val json = try { file.readText() } catch (e: Exception) { return }
+        val js = "(function(){if(window.onProductScanResult){window.onProductScanResult(" +
+                JSONObject.quote(json) + ");return 'ok';}return 'no';})()"
+        webView.evaluateJavascript(js) { r -> if (r == "\"ok\"") synchronized(this) { file.delete() } }
+    }
+
+    @Synchronized
+    fun takePendingScanResult(): String? {
+        val file = ProductScanActivity.resultFile(this)
+        if (!file.exists()) return null
+        return try { file.readText().also { file.delete() } } catch (e: Exception) { null }
     }
 
     private fun requestAllPermissions() {

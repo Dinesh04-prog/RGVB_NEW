@@ -20,6 +20,9 @@ export interface InventoryItem {
   stock_qty?: number;
   barcode?: string;
   unit_rates?: Record<string, number>;
+  net_qty?: string;      // pack size, e.g. "250 g"
+  expiry_date?: string;  // ISO yyyy-MM-dd
+  mfg_date?: string;     // ISO yyyy-MM-dd
 }
 
 export interface ReviewSession {

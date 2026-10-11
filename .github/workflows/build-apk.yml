@@ -41,6 +41,10 @@ jobs:
           VITE_FIREBASE_APP_ID: "1:77380160715:web:c6cd94906ee7fcc24b9f4e"
           VITE_FIREBASE_MEASUREMENT_ID: "G-QSGXW4SQLV"
 
+      - name: Test item-name logic (bilingual names, short code, duplicates)
+        working-directory: nexus-react-pos
+        run: npm run test:names
+
       # ── 3. Copy web build into Android assets ────────────────────────────────
       - name: Copy dist → Android assets
         run: |
@@ -103,9 +107,19 @@ jobs:
           sudo unzip -q /tmp/gradle.zip -d /opt
           echo "/opt/gradle-8.6/bin" >> $GITHUB_PATH
 
+      # Label parser tests (pure JVM). A failure stops the build before the APK is made.
+      - name: Run unit tests
+        working-directory: nexus-android
+        run: gradle testDebugUnitTest --no-daemon
+
       - name: Build release APK
         working-directory: nexus-android
         run: gradle assembleRelease --no-daemon
+
+      - name: Print APK size
+        run: |
+          APK=nexus-android/app/build/outputs/apk/release/app-release.apk
+          echo "APK size: $(du -h "$APK" | cut -f1) ($(stat -c %s "$APK") bytes)"
 
       # ── 6. Upload APK as downloadable artifact ───────────────────────────────
       - name: Upload APK

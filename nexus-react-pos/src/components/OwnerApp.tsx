@@ -514,7 +514,7 @@ export default function OwnerApp({ initialReviewId }: { initialReviewId: string 
 
             <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
               <div style={{ flex: 1 }}>
-                <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#6c757d', marginBottom: '2px', display: 'block' }}>PURCHASE RATE</label>
+                <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#6c757d', marginBottom: '2px', display: 'block' }}>MRP</label>
                 <input type="number" className="edit-input"
                   value={isNaN(inventoryEditItem.purchase_price as number) ? '' : inventoryEditItem.purchase_price}
                   onChange={e => setInventoryEditItem({ ...inventoryEditItem, purchase_price: Number(e.target.value) })} />

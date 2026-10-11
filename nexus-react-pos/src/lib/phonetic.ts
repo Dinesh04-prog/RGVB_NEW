@@ -360,7 +360,7 @@ export const parseUserQuery = (query: string, brandIndex: Set<string>): ParsedQu
 // Higher = better match.  Name fuzzy score is handled separately by Fuse.
 // ─────────────────────────────────────────────────────────────────────────────
 export const scoreCandidate = (
-  item: { price?: number; purchase_price?: number; unit?: string; brand?: string },
+  item: { price?: number; purchase_price?: number; unit?: string; brand?: string; net_qty?: string },
   parsed: ParsedQuery
 ): number => {
   let score = 0;
@@ -375,7 +375,8 @@ export const scoreCandidate = (
 
   // Unit (qty + type match against item.unit string)
   if (parsed.unitQty && parsed.unitType) {
-    const iu = (item.unit || '').toLowerCase().replace(/\s+/g, '');
+    // Pack size lives in net_qty ("200 g") for photo-added items; unit stays the billing unit.
+    const iu = ((item.unit || '') + (item.net_qty || '')).toLowerCase().replace(/\s+/g, '');
     const qtyStr = parsed.unitQty.toString();
     const hasQty  = iu.includes(qtyStr);
     const hasType = iu.includes(parsed.unitType);
