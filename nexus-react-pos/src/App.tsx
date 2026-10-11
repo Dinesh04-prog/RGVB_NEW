@@ -34,6 +34,7 @@ interface InventoryItem {
   net_qty?: string;      // pack size, e.g. "250 g" (photo add)
   expiry_date?: string;  // ISO yyyy-MM-dd
   mfg_date?: string;     // ISO yyyy-MM-dd
+  full_name_eng?: string; // long name read from the pack (search only; name/name_eng hold the short name)
 }
 
 const getUnitMultiplier = (targetUnit: string, baseUnit: string) => {
@@ -148,6 +149,7 @@ export default function App() {
       { name: "id",           weight: 0.5 },
       { name: "barcode",      weight: 0.5 },
       { name: "net_qty",      weight: 0.5 },
+      { name: "full_name_eng", weight: 0.3 },
     ],
     threshold: 0.45, ignoreLocation: true, distance: 300,
     minMatchCharLength: 2, shouldSort: true, includeScore: true,
@@ -537,7 +539,7 @@ export default function App() {
     // Always update local state immediately so the UI reflects the change
     setInventory(newInv);
     await localforage.setItem('custom_inventory', newInv);
-    setFuse(new Fuse(newInv, { keys: [{ name: "search_key", weight: 3 }, { name: "name_marathi", weight: 1.5 }, { name: "name", weight: 1 }, { name: "name_eng", weight: 1 }, { name: "brand", weight: 1 }, { name: "net_qty", weight: 0.5 }], threshold: 0.45, ignoreLocation: true, distance: 300, minMatchCharLength: 2, shouldSort: true, includeScore: true }));
+    setFuse(new Fuse(newInv, { keys: [{ name: "search_key", weight: 3 }, { name: "name_marathi", weight: 1.5 }, { name: "name", weight: 1 }, { name: "name_eng", weight: 1 }, { name: "brand", weight: 1 }, { name: "net_qty", weight: 0.5 }, { name: "full_name_eng", weight: 0.3 }], threshold: 0.45, ignoreLocation: true, distance: 300, minMatchCharLength: 2, shouldSort: true, includeScore: true }));
     // Best-effort Firebase sync — never block the save on network
     try { await saveInventoryItemToCloud(item); } catch (err) { console.error("Firebase sync failed:", err); }
     await syncInventoryToXlsx(newInv);
@@ -575,7 +577,7 @@ export default function App() {
     // Always update local state immediately
     setInventory(newInv);
     await localforage.setItem('custom_inventory', newInv);
-    setFuse(new Fuse(newInv, { keys: [{ name: "search_key", weight: 3 }, { name: "name_marathi", weight: 1.5 }, { name: "name", weight: 1 }, { name: "name_eng", weight: 1 }, { name: "brand", weight: 1 }, { name: "net_qty", weight: 0.5 }], threshold: 0.45, ignoreLocation: true, distance: 300, minMatchCharLength: 2, shouldSort: true, includeScore: true }));
+    setFuse(new Fuse(newInv, { keys: [{ name: "search_key", weight: 3 }, { name: "name_marathi", weight: 1.5 }, { name: "name", weight: 1 }, { name: "name_eng", weight: 1 }, { name: "brand", weight: 1 }, { name: "net_qty", weight: 0.5 }, { name: "full_name_eng", weight: 0.3 }], threshold: 0.45, ignoreLocation: true, distance: 300, minMatchCharLength: 2, shouldSort: true, includeScore: true }));
     // Best-effort Firebase sync
     try { await removeInventoryItemFromCloud(inventoryEditItem.id); } catch (err) { console.error("Firebase sync failed:", err); }
     await syncInventoryToXlsx(newInv);

@@ -55,6 +55,33 @@ Photos and thumbnails are **not** sent to the web app.
 * Open Food Facts: one call per scan, no retries, capped at 14 calls/min in the app (their limit is 15/min/IP).
   User-Agent is `OpenFoodFacts.USER_AGENT`.
 
+## Short names for the receipt
+
+Pack text is long, and the 58/80 mm receipt prints names as bitmap rows, so the popup gets a **short name**.
+The long pack text is kept in `full_name_eng`, which is searchable (Fuse weight 0.3) but not shown.
+
+* `shortenProductName()` and `shortBilingualName()` in `src/lib/itemNames.ts` are pure and deterministic.
+  The limits are in one place: `SHORT_NAME_LIMITS = { eng: 28, marathi: 24 }`. English counts characters;
+  Marathi counts **printed letters** (matras, virama, nukta and anusvara share a column), both including the size.
+* **Kept:** the brand when it is the product's identity, the core product word, the variant that matters, and the size.
+  The parent brand is dropped when a sub-brand carries the name ("britannia good day" → "good day").
+  Makers that are not the identity (Cipla, HUL, ITC…) are dropped.
+* **Always dropped:** `FILLER_WORDS` (original, premium, classic, new, special, pure, natural, fresh, family/value pack,
+  combo, with, net wt, approx, vacuum/evaporated/iodised, compounded…), `PHARMA_SUFFIXES` (sulphate, hydrochloride,
+  sodium, USP, IP, BP…), `COMPANY_WORDS` (pvt, ltd, industries, foods, products…), repeated words, "100%", and
+  taglines after "with / enriched with" once the product type has been named.
+* **Too long:** first `SOFT_WORDS` go (refined, anticavity, herbal, ayurvedic, extra…), then the type word the brand
+  already implies (`BRAND_IMPLIES`: colgate → toothpaste, maggi → noodles…), then other words from the end.
+  The size and the core word are never dropped.
+* **Unsure** (no product type and no known brand, or words had to be cut): brand + the 2 most prominent words + size,
+  and a "नाव तपासा" note appears in the popup.
+* **Marathi** is built word by word from the short English name, never cut from a long string. If it is too wide,
+  one more English word goes and both names are rebuilt. Synonyms that give the same Marathi word are kept once
+  ("hing asafoetida" → हिंग).
+* **Learning:** when the user deletes a word from a suggested Marathi name before saving, the matching English word
+  is stored as `!drop:<word>` in `photo_name_map` and is dropped next time. Type words and brands are never learned as drops.
+* Size style: `250g`, `1kg`, `200ml`, `1l` (inventory.json only has g and kg; litres follow the same pattern).
+
 ## Data mapping
 
 | Scan field | InventoryItem field | Note |
@@ -63,7 +90,8 @@ Photos and thumbnails are **not** sent to the web app.
 | Sale rate | `price` | Defaults to MRP |
 | Pack size | `net_qty` (new, optional) | `unit` stays the billing unit (`pcs` default; kg/pack selectable) |
 | Expiry / MFG | `expiry_date` / `mfg_date` (new, optional ISO) | |
-| Names | `name_marathi`, `name_eng`, `name` = Marathi | Shop style: `"red lebal 250g"` / `"रेड लेबल २५० ग्रॅम"` |
+| Names | `name_marathi`, `name_eng`, `name` = Marathi | Short, shop style: `"neomycin cream 10g"` / `"निओमायसिन क्रीम १० ग्रॅम"` |
+| Long pack name | `full_name_eng` (new, optional) | e.g. `"neomycin sulphate cream usp 10g"`; search only |
 | Short code | `search_key` | lowercase(first 4 of `name_eng` + " " + first 4 of `name_marathi`); matches all 163 items in inventory.json |
 
 Bilingual names (`src/lib/itemNames.ts`): Devanagari OCR (Hindi words respelled to Marathi) → the shop's

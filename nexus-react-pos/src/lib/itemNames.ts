@@ -27,11 +27,11 @@ const parseQty = (netQty: string | undefined | null) => {
   return m ? { n: m[1], u: m[2].toLowerCase() } : null;
 };
 
-/** "250 g" → "250g", "1 kg" → "1kg", "500 ml" → "500ml", "1 L" → "1ltr" */
+/** "250 g" → "250g", "1 kg" → "1kg", "500 ml" → "500ml", "1 L" → "1l" */
 export const qtyEng = (netQty: string | undefined | null): string => {
   const q = parseQty(netQty);
   if (!q) return '';
-  return q.n + (q.u === 'l' ? 'ltr' : q.u);
+  return q.n + q.u;   // shop style: 250g, 1kg, 500ml, 1l
 };
 
 /** "250 g" → "२५० ग्रॅम", "1 kg" → "१ किलो", "500 ml" → "५०० मिली", "1 L" → "१ लिटर" */
@@ -69,6 +69,8 @@ export const BRAND_MARATHI: WordMap = {
   'bru': 'ब्रू', 'kissan': 'किसान', 'patanjali': 'पतंजली', 'aashirvaad': 'आशीर्वाद', 'chitale': 'चितळे',
   'pravin': 'प्रवीण', 'suhana': 'सुहाना', 'ramdev': 'रामदेव', 'bikaji': 'बिकाजी', 'pepsodent': 'पेप्सोडेंट',
   'close up': 'क्लोज अप', 'sensodyne': 'सेन्सोडाइन', 'harpic': 'हार्पिक', 'lizol': 'लायझॉल',
+  'nivea': 'निव्हिया', "pond's": 'पॉन्ड्स', 'ponds': 'पॉन्ड्स', 'vaseline': 'व्हॅसलीन', 'boroline': 'बोरोलीन',
+  'vicks': 'विक्स', 'zandu': 'झंडू', 'iodex': 'आयोडेक्स', 'moov': 'मूव्ह', 'dabur amla': 'डाबर आवळा',
 };
 
 /** Common packaged-goods words not in HINGLISH_TO_MARATHI (shop-style spellings). */
@@ -87,6 +89,10 @@ export const LOANWORDS: WordMap = {
   'anti-dandruff': 'अँटी-डँड्रफ', 'conditioner': 'कंडिशनर', 'hair': 'केसांचे', 'toothbrush': 'टूथब्रश',
   'rusk': 'टोस्ट', 'toast': 'टोस्ट', 'masala munch': 'मसाला मंच', 'munch': 'मंच', 'sandwich': 'सँडविच',
   'chocolatey': 'चॉकलेटी', 'cashew': 'काजू', 'roasted': 'भाजलेले', 'powder': 'पावडर',
+  // medicines and cosmetics
+  'tablet': 'टॅबलेट', 'capsule': 'कॅप्सूल', 'syrup': 'सिरप', 'ointment': 'मलम', 'lotion': 'लोशन', 'balm': 'बाम',
+  'gel': 'जेल', 'drops': 'ड्रॉप्स', 'spray': 'स्प्रे', 'care': 'केअर', 'body': 'बॉडी', 'face': 'फेस',
+  'facewash': 'फेसवॉश', 'strength': 'स्ट्रेंथ', 'intensive': 'इंटेन्सिव्ह',
 };
 
 /**
@@ -101,6 +107,8 @@ export const PRODUCT_PHRASES: WordMap = {
   'gulab jamun': 'गुलाबजाम', 'rasgulla': 'रसगुल्ला', 'kaju katli': 'काजू कतली', 'dairy milk': 'डेअरी मिल्क',
   'milk bikis': 'मिल्क बिकीस', 'hide & seek': 'हाइड अँड सीक', 'pav bhaji masala': 'पावभाजी मसाला',
   'chole masala': 'छोले मसाला', 'amul butter': 'अमूल बटर', 'moong dal namkeen': 'मूग डाळ नमकीन',
+  // shop spellings that beat the dictionary meaning (inventory.json writes आटा, not गव्हाचे)
+  'atta': 'आटा', 'chakki atta': 'चक्की आटा', 'dolo': 'डोलो',
 };
 
 /** Hindi spellings OCR often reads from packs → Marathi shop spelling. */
@@ -184,9 +192,20 @@ const lookupPhrase = (phrase: string, maps: NameMaps): [string, WordSource] | nu
 const singular = (w: string) =>
   w.endsWith('ies') ? w.slice(0, -3) + 'y' : w.endsWith('es') && w.length > 4 ? w.slice(0, -2) : w.endsWith('s') ? w.slice(0, -1) : w;
 
+/**
+ * English-spelled words (medicine and brand names: "neomycin", "diclofenac", "betadine") are respelled
+ * the way they sound before transliteration. Romanized Marathi ("kesh", "rajwadi") is left alone.
+ */
+const respellEnglish = (w: string) => {
+  if (!/c|x|q|ph/.test(w) && !/ine$/.test(w)) return w;
+  return w
+    .replace(/ph/g, 'f').replace(/ck/g, 'k').replace(/c(?=[eiy])/g, 's').replace(/c/g, 'k')
+    .replace(/x/g, 'ks').replace(/q/g, 'k').replace(/(?<=.)y/g, 'i').replace(/ine$/, 'in');
+};
+
 // Marathi words ending in a consonant are written without a trailing halant ("गोकुल्" → "गोकुल")
 const phonetic = (word: string) =>
-  translateHinglishToMarathi(word.replace(/[^a-z]/gi, '')).replace(/्$/, '');
+  translateHinglishToMarathi(respellEnglish(word.replace(/[^a-z]/gi, '').toLowerCase())).replace(/्$/, '');
 
 /** "fortune refined sunflower oil" → "फॉर्च्यून रिफाइंड सूर्यफूल तेल" (longest phrase first, up to 3 words). */
 export const englishToMarathi = (english: string, maps: NameMaps): Translation => {
@@ -261,7 +280,7 @@ export const marathiToEnglish = (marathi: string, maps: NameMaps): Translation =
     }
     if (done) continue;
     const w = words[i];
-    const unitEng: Record<string, string> = { 'ग्रॅम': 'g', 'ग्राम': 'g', 'किलो': 'kg', 'मिली': 'ml', 'लिटर': 'ltr' };
+    const unitEng: Record<string, string> = { 'ग्रॅम': 'g', 'ग्राम': 'g', 'किलो': 'kg', 'मिली': 'ml', 'लिटर': 'l' };
     if (/^[०-९.]+$/.test(w) && unitEng[words[i + 1]]) {
       out.push(w.replace(/[०-९]/g, d => String(DEV_DIGITS.indexOf(d))) + unitEng[words[i + 1]]);
       sources.push('number'); i += 2; continue;
@@ -381,7 +400,7 @@ const qtyFromName = (nameEng: string | undefined) => {
   const m = /(\d+(?:\.\d+)?)\s*(kg|g|gm|ml|ltr|l)\b/i.exec(nameEng || '');
   if (!m) return '';
   const u = m[2].toLowerCase();
-  return m[1] + (u === 'gm' ? 'g' : u === 'l' ? 'ltr' : u);
+  return m[1] + (u === 'gm' ? 'g' : u === 'ltr' ? 'l' : u);
 };
 
 export const findDuplicate = <T extends DupCandidate>(
@@ -458,4 +477,336 @@ export const buildPhotoItem = (form: PhotoItemForm, id: string): SavedPhotoItem 
     ...(form.expiry_date ? { expiry_date: form.expiry_date } : {}),
     ...(form.mfg_date ? { mfg_date: form.mfg_date } : {}),
   };
+};
+
+// ── Short names for the receipt ──────────────────────────────────────────────
+//
+// Pack text is long ("Neomycin Sulphate Cream USP"); the receipt prints names as bitmap rows on a
+// 58/80 mm printer, so items are saved under a short name ("neomycin cream 10g").
+// The full text is kept in full_name_eng (searchable, low weight).
+
+/** Change these to tune the receipt width. English: characters incl. size. Marathi: printed letters incl. size. */
+export const SHORT_NAME_LIMITS = { eng: 28, marathi: 24 };
+
+/** Always dropped. */
+export const FILLER_WORDS = new Set([
+  // marketing
+  'original', 'premium', 'classic', 'new', 'special', 'pure', 'natural', 'fresh', 'best', 'quality', 'superior',
+  'finest', 'rich', 'tasty', 'delicious', 'healthy', 'improved', 'perfect', 'genuine', 'authentic', 'traditional',
+  'homestyle', 'real', 'true', 'nutritious', 'wholesome', 'goodness', 'trusted', 'favourite', 'favorite',
+  'vacuum', 'evaporated', 'iodised', 'iodized', 'free-flowing', 'flowing', 'grade', 'export', 'imported', 'compounded',
+  // packs and labels
+  'family', 'value', 'pack', 'combo', 'approx', 'net', 'wt', 'weight', 'qty', 'quantity', 'contents', 'content',
+  // glue words
+  'the', 'of', 'a', 'an', 'for', 'and', 'in', 'with',
+  // Hinglish
+  'asli', 'naya', 'shuddh', 'shudh', 'khaas', 'khas',
+]);
+
+/** Marathi / Hindi filler words dropped from Devanagari-only names. */
+export const FILLER_WORDS_MARATHI = new Set([
+  'नवीन', 'नया', 'शुद्ध', 'प्रीमियम', 'ओरिजिनल', 'स्पेशल', 'फ्रेश', 'नॅचरल', 'असली', 'खास', 'सह', 'आणि', 'और', 'वाला',
+]);
+
+/** Medicine/cosmetic salt forms and pharmacopeia marks: "Neomycin Sulphate Cream USP" → "neomycin cream". */
+export const PHARMA_SUFFIXES = new Set([
+  'usp', 'u.s.p', 'ip', 'i.p', 'bp', 'b.p', 'nf', 'sulphate', 'sulfate', 'hydrochloride', 'hcl',
+  'sodium', 'potassium', 'phosphate', 'acetate', 'maleate', 'citrate', 'dipropionate', 'propionate', 'monohydrate',
+  'trihydrate', 'besylate', 'mesylate', 'succinate', 'tartrate',
+]);
+
+/** Company words: "Parle Products Pvt. Ltd." never belongs in an item name. */
+export const COMPANY_WORDS = new Set([
+  'pvt', 'private', 'ltd', 'limited', 'industries', 'foods', 'products', 'consumer', 'company', 'co',
+  'corporation', 'corp', 'inc', 'llp', 'marketed', 'manufactured', 'by', 'mfd', 'mfg',
+]);
+
+/** Dropped only when the name is too long (first to go). */
+export const SOFT_WORDS = new Set([
+  'refined', 'anticavity', 'anti-cavity', 'herbal', 'ayurvedic', 'advanced', 'active', 'extra', 'super', 'ultra',
+  'double', 'triple', 'crunchy', 'crispy', 'instant', 'dental', 'fortified', 'enriched', 'multipurpose', 'regular',
+]);
+
+/** Product-type words: the core of a name ("oil", "soap", "cream"…). Plurals are saved singular. */
+export const TYPE_WORDS = new Set([
+  'biscuit', 'cookie', 'cracker', 'wafer', 'rusk', 'cake', 'oil', 'soap', 'shampoo', 'conditioner', 'tea', 'coffee', 'salt',
+  'sugar', 'toothpaste', 'paste', 'toothbrush', 'cream', 'ointment', 'gel', 'lotion', 'tablet', 'capsule', 'syrup', 'drops',
+  'suspension', 'powder', 'masala', 'noodles', 'chips', 'atta', 'flour', 'besan', 'rava', 'dal', 'rice', 'poha', 'ghee',
+  'butter', 'jam', 'sauce', 'ketchup', 'pickle', 'papad', 'namkeen', 'bhujia', 'handwash', 'facewash', 'detergent', 'bar',
+  'liquid', 'cleaner', 'honey', 'juice', 'drink', 'milk', 'agarbatti', 'deodorant', 'talc', 'balm', 'spray', 'mix', 'sev',
+  'chivda', 'vermicelli', 'shevaya', 'oats', 'cornflakes', 'chocolate',
+]);
+const SINGULAR: Record<string, string> = {
+  biscuits: 'biscuit', cookies: 'cookie', crackers: 'cracker', wafers: 'wafer', tablets: 'tablet', capsules: 'capsule',
+  soaps: 'soap', rusks: 'rusk', cakes: 'cake',
+};
+
+/** Medicine forms: the manufacturer is not part of the name. */
+export const MEDICINE_FORMS = new Set(['cream', 'ointment', 'gel', 'tablet', 'capsule', 'syrup', 'drops', 'suspension', 'lotion', 'balm', 'spray']);
+
+/** Parent companies / pharma makers: printed on packs but not the product's identity. */
+export const NON_IDENTITY_BRANDS = new Set([
+  'itc', 'hul', 'hindustan unilever', 'nestle', 'p&g', 'procter & gamble', 'reckitt', 'reckitt benckiser', 'marico',
+  'adani wilmar', 'tata consumer', 'cipla', 'sun pharma', 'mankind', 'glenmark', 'gsk', 'glaxosmithkline', 'abbott',
+  'pfizer', 'dr reddys', 'lupin', 'zydus', 'alkem', 'torrent', 'micro labs', 'intas', 'mylan',
+]);
+
+/** Sub-brands that carry the identity on their own: the parent brand is dropped ("britannia good day" → "good day"). */
+export const SUB_BRANDS = ['good day', 'marie gold', 'milk bikis', 'bourbon', 'hide & seek', 'dairy milk', 'red label', 'dolo'];
+
+/** The brand already says what the product is, so the type word may go when space is short. */
+export const BRAND_IMPLIES: Record<string, string> = {
+  colgate: 'toothpaste', pepsodent: 'toothpaste', 'close up': 'toothpaste', sensodyne: 'toothpaste', meswak: 'toothpaste',
+  lux: 'soap', lifebuoy: 'soap', santoor: 'soap', medimix: 'soap', cinthol: 'soap', pears: 'soap', hamam: 'soap',
+  maggi: 'noodles', yippee: 'noodles', 'parle-g': 'biscuit', 'surf excel': 'detergent', nirma: 'detergent',
+  ghadi: 'detergent', tide: 'detergent', ariel: 'detergent', 'clinic plus': 'shampoo', sunsilk: 'shampoo',
+  'head & shoulders': 'shampoo', parachute: 'oil', kurkure: 'namkeen',
+};
+
+const DEV_MARKS = new Set([
+  ...Array.from({ length: 4 }, (_, i) => 0x0900 + i),          // candrabindu, anusvara, visarga
+  ...Array.from({ length: 3 }, (_, i) => 0x093a + i),          // vowel signs, nukta
+  ...Array.from({ length: 0x094f - 0x093e + 1 }, (_, i) => 0x093e + i),   // matras, virama
+  ...Array.from({ length: 7 }, (_, i) => 0x0951 + i), 0x0962, 0x0963,
+]);
+
+/** Printed width of Devanagari text: matras, virama, nukta and anusvara share the base letter's column. */
+export const printedLength = (s: string): number => [...s].filter(c => !DEV_MARKS.has(c.codePointAt(0)!)).length;
+
+const SIZE_TOKEN = /^(\d+(?:\.\d+)?)(g|gm|gms|gram|grams|kg|kgs|ml|l|ltr|litre|liter)$/;
+const SIZE_UNIT: Record<string, string> = { gm: 'g', gms: 'g', gram: 'g', grams: 'g', kgs: 'kg', ltr: 'l', litre: 'l', liter: 'l' };
+
+export interface ShortName {
+  /** final short English name, shop style: "neomycin cream 10g" */
+  eng: string;
+  /** kept product words without brand/size: ["neomycin", "cream"] */
+  words: string[];
+  brand: string | null;
+  size: string;            // shop style "10g", "" when unknown
+  core: string | null;     // the word that must never be dropped
+  full: string;            // cleaned long name, lowercase, size glued
+  dropped: string[];
+  unsure: boolean;
+}
+
+interface Tok { w: string; kind: 'sub' | 'type' | 'soft' | 'num' | 'word' }
+
+const escRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Shorten a product name read from a pack (may span several OCR lines).
+ * Deterministic: same input → same output. `learnedDrops` holds words the user removed before.
+ */
+export const shortenProductName = (
+  parsedName: string | null | undefined,
+  brand: string | null | undefined,
+  netQty: string | null | undefined,
+  learnedDrops: ReadonlySet<string> = new Set(),
+  limit = SHORT_NAME_LIMITS.eng,
+): ShortName => {
+  const brandLc = (brand || '').toLowerCase().trim();
+  const raw = (parsedName || '').toLowerCase().replace(/[®™©]/g, ' ').replace(/\b\d+\s*%/g, ' ');   // "100% pure"
+  const lines = raw.split(/\n+/).map(l => l.replace(/[^a-z0-9&'.\- ]/g, ' ').replace(/\s+/g, ' ').trim()).filter(Boolean);
+
+  let size = qtyEng(netQty);
+  const dropped: string[] = [];
+  const tokens: string[] = [];
+  for (const line of lines) {
+    let ws = line.split(' ').map(w => w.replace(/^[.'-]+|[.'-]+$/g, '')).filter(Boolean);
+    // "… enriched with iron" / "… with goodness of milk" after the product type is a tagline: drop the rest
+    const withAt = ws.findIndex(w => w === 'with' || w === 'enriched' || w === 'fortified');
+    if (withAt > 0 && ws.slice(0, withAt).some(w => TYPE_WORDS.has(SINGULAR[w] ?? w))) {
+      dropped.push(...ws.slice(withAt));
+      ws = ws.slice(0, withAt);
+    }
+    // join "10 g" → "10g"
+    for (let i = 0; i < ws.length - 1; i++) {
+      if (/^\d+(\.\d+)?$/.test(ws[i]) && SIZE_TOKEN.test('1' + ws[i + 1])) { ws[i] += ws[i + 1]; ws.splice(i + 1, 1); }
+    }
+    tokens.push(...ws);
+  }
+  const sizeOf = (w: string) => {
+    const m = SIZE_TOKEN.exec(w);
+    return m ? qtyEng(`${m[1]} ${SIZE_UNIT[m[2]] ?? m[2]}`) : '';
+  };
+  if (!size) size = tokens.map(sizeOf).find(Boolean) ?? '';
+
+  // Remove the brand wherever it appears (it is placed once, in front)
+  let text = ' ' + tokens.filter(t => !SIZE_TOKEN.test(t)).join(' ') + ' ';
+  const fullBody = text.trim();
+  if (brandLc) {
+    for (const v of new Set([brandLc, brandLc.replace(/-/g, ' '), brandLc.replace(/'/g, ''), brandLc.replace(/ /g, '')])) {
+      text = text.replace(new RegExp(` ${escRe(v)}(?= )`, 'g'), ' ');
+    }
+  }
+  const full = [brandLc, brandLc ? text.trim() : fullBody, size].filter(Boolean).join(' ').replace(/\s+/g, ' ');
+
+  const toks: Tok[] = [];
+  const seen = new Set<string>();
+  const words = text.trim().split(' ').filter(Boolean);
+  for (let i = 0; i < words.length; i++) {
+    const two = `${words[i]} ${words[i + 1] ?? ''}`.trim();
+    const three = `${two} ${words[i + 2] ?? ''}`.trim();
+    const sub = SUB_BRANDS.find(sb => sb === words[i] || sb === two || sb === three);
+    if (sub) {
+      if (!seen.has(sub)) { toks.push({ w: sub, kind: 'sub' }); seen.add(sub); }
+      i += sub.split(' ').length - 1;
+      continue;
+    }
+    const w = SINGULAR[words[i]] ?? words[i];
+    if (FILLER_WORDS.has(w) || PHARMA_SUFFIXES.has(w) || COMPANY_WORDS.has(w) || learnedDrops.has(w)) { dropped.push(w); continue; }
+    if (seen.has(w)) { dropped.push(w); continue; }   // repeated word ("salt … salt")
+    seen.add(w);
+    toks.push({ w, kind: TYPE_WORDS.has(w) ? 'type' : SOFT_WORDS.has(w) ? 'soft' : /\d/.test(w) ? 'num' : 'word' });
+  }
+
+  // Brand: kept when it is the product's identity
+  const hasSub = toks.some(t => t.kind === 'sub');
+  const isMedicine = toks.some(t => MEDICINE_FORMS.has(t.w));
+  let keepBrand: string | null = brandLc || null;
+  if (keepBrand && (NON_IDENTITY_BRANDS.has(keepBrand) || hasSub)) { dropped.push(keepBrand); keepBrand = null; }
+  // A medicine named by its active ingredient does not need an unknown maker's name
+  if (keepBrand && isMedicine && !BRAND_MARATHI[keepBrand] && toks.some(t => t.kind === 'word')) {
+    dropped.push(keepBrand); keepBrand = null;
+  }
+
+  // Core word: the product type, unless the brand already implies it; else the first name word
+  const implied = keepBrand ? BRAND_IMPLIES[keepBrand] : undefined;
+  const typeTok = toks.find(t => t.kind === 'type' && t.w !== implied);
+  // When the brand alone says what the product is (Colgate, Head & Shoulders), the brand is the core
+  const core = typeTok?.w
+    ?? (implied ? null : toks.find(t => t.kind === 'sub' || t.kind === 'word' || t.kind === 'num')?.w)
+    ?? (implied ? null : toks.find(t => t.kind === 'type')?.w) ?? null;
+
+  const build = (ts: Tok[], b: string | null) => [b, ...ts.map(t => t.w), size].filter(Boolean).join(' ');
+  let kept = [...toks];
+  let unsure = !toks.some(t => t.kind === 'type') && !keepBrand && !hasSub;   // nothing says what this is
+  const tooLong = () => build(kept, keepBrand).length > limit;
+  const drop = (pred: (t: Tok) => boolean, fromEnd = true) => {
+    const order = fromEnd ? [...kept].reverse() : kept;
+    const t = order.find(x => x.w !== core && pred(x));
+    if (!t) return false;
+    kept = kept.filter(x => x !== t);
+    dropped.push(t.w);
+    return true;
+  };
+  // 1) soft adjectives  2) the type word the brand implies  3) other words from the end (marks unsure)
+  while (tooLong() && drop(t => t.kind === 'soft', false)) { /* keep dropping */ }
+  if (tooLong() && implied) drop(t => t.w === implied);
+  while (tooLong() && drop(t => t.kind === 'word' || t.kind === 'type')) unsure = true;
+  if (tooLong() && keepBrand) { dropped.push(keepBrand); keepBrand = null; unsure = true; }
+  while (tooLong() && drop(() => true)) unsure = true;
+
+  // A connector left at either end after dropping ("strength & 6ml") goes too
+  const isGlue = (t: Tok) => t.w === '&' || t.w === 'and' || t.w === '+';
+  while (kept.length && isGlue(kept[kept.length - 1])) dropped.push(kept.pop()!.w);
+  while (kept.length && isGlue(kept[0])) dropped.push(kept.shift()!.w);
+
+  // Unsure: brand + the 2 most prominent words (core included) + size
+  if (unsure && kept.length > 2) {
+    const coreTok = kept.find(t => t.w === core);
+    const others = kept.filter(t => t !== coreTok).slice(0, coreTok ? 1 : 2);
+    const two = [...others, ...(coreTok ? [coreTok] : [])].sort((a, b) => kept.indexOf(a) - kept.indexOf(b));
+    dropped.push(...kept.filter(t => !two.includes(t)).map(t => t.w));
+    kept = two;
+  }
+
+  return { eng: build(kept, keepBrand), words: kept.map(t => t.w), brand: keepBrand, size, core, full, dropped, unsure };
+};
+
+export interface ShortBilingual {
+  name_eng: string;
+  name_marathi: string;
+  /** the long cleaned name, '' when it equals the short one */
+  full_name_eng: string;
+  unsure: boolean;
+  dropped: string[];
+  mrPhonetic: string[];
+}
+
+/** Words the user removed from suggested names before (stored in the learned map as "!drop:<word>"). */
+export const learnedDropWords = (learned: WordMap): Set<string> =>
+  new Set(Object.keys(learned).filter(k => k.startsWith('!drop:')).map(k => k.slice(6)));
+
+/**
+ * Short English name first, then the Marathi name built word by word from it (never a cut long string).
+ * If the Marathi is still too wide, one more English word is dropped and both are rebuilt.
+ */
+export const shortBilingualName = (
+  input: { brand?: string | null; productEng?: string | null; productDev?: string | null; netQty?: string | null },
+  maps: NameMaps,
+): ShortBilingual => {
+  const drops = learnedDropWords(maps.learned);
+  const qtyMr = qtyMarathi(input.netQty);
+
+  if (!input.productEng?.trim() && input.productDev?.trim()) {
+    // Only Devanagari was read: drop filler words, then whole words from the end
+    const brandMr = input.brand ? englishToMarathi(input.brand.toLowerCase(), maps).text : '';
+    const brandWords = new Set(brandMr.split(' '));
+    let ws = hindiToMarathi(input.productDev.trim()).text.split(/\s+/)
+      .filter(w => w && !FILLER_WORDS_MARATHI.has(w) && !brandWords.has(w));
+    const mk = (xs: string[]) => [brandMr, ...xs, qtyMr].filter(Boolean).join(' ');
+    let unsure = false;
+    while (ws.length > 1 && printedLength(mk(ws)) > SHORT_NAME_LIMITS.marathi) { ws = ws.slice(0, -1); unsure = true; }
+    const mr = mk(ws);
+    const en = marathiToEnglish(mr, maps);
+    return {
+      name_eng: normalizeEngName(en.text), name_marathi: normalizeMarathiName(mr), full_name_eng: '',
+      unsure: unsure || en.phoneticWords.length > 0, dropped: [], mrPhonetic: [],
+    };
+  }
+
+  // Synonyms that become the same Marathi word ("hing asafoetida" → हिंग हिंग): keep the first only
+  const synonymDrops = new Set(drops);
+  for (let guard = 0; guard < 5; guard++) {
+    const s = shortenProductName(input.productEng, input.brand, input.netQty, synonymDrops);
+    const seenMr = new Map<string, string>();
+    let found = false;
+    for (const w of s.words) {
+      const mr = englishToMarathi(w, maps).text;
+      if (seenMr.has(mr) && seenMr.get(mr) !== w) { synonymDrops.add(w); found = true; } else seenMr.set(mr, w);
+    }
+    if (!found) break;
+  }
+
+  let last: ShortBilingual | null = null;
+  for (let limit = SHORT_NAME_LIMITS.eng; limit >= 8; limit--) {
+    const s = shortenProductName(input.productEng, input.brand, input.netQty, synonymDrops, limit);
+    const brandMr = s.brand ? englishToMarathi(s.brand, maps) : null;
+    const body = s.words.length ? englishToMarathi(s.words.join(' '), maps) : null;
+    const mr = [brandMr?.text, body?.text, qtyMr].filter(Boolean).join(' ');
+    last = {
+      name_eng: s.eng,
+      name_marathi: normalizeMarathiName(mr),
+      full_name_eng: s.full !== s.eng ? s.full : '',
+      unsure: s.unsure || limit < SHORT_NAME_LIMITS.eng,
+      dropped: s.dropped,
+      mrPhonetic: [...(brandMr?.phoneticWords ?? []), ...(body?.phoneticWords ?? [])],
+    };
+    if (printedLength(last.name_marathi) <= SHORT_NAME_LIMITS.marathi || s.words.length <= 1) return last;
+  }
+  return last!;
+};
+
+/**
+ * The user removed words from a suggested name before saving: remember them as "!drop:<word>" so the same
+ * filler is dropped next time. Uses the word-by-word pairing of the suggested names.
+ */
+export const learnDroppedWords = (
+  map: WordMap,
+  suggested: { name_eng: string; name_marathi: string },
+  final: { name_marathi: string },
+): WordMap => {
+  const en = stripTokens(suggested.name_eng, false);
+  const mr = stripTokens(suggested.name_marathi, true).filter(t => /[ऀ-ॿ]/.test(t));
+  const finalMr = new Set(stripTokens(final.name_marathi, true));
+  if (!en.length || en.length !== mr.length || !finalMr.size) return map;
+  let next = map;
+  en.forEach((w, i) => {
+    if (!finalMr.has(mr[i]) && /^[a-z][a-z'-]+$/.test(w) && !TYPE_WORDS.has(w) && !BRAND_MARATHI[w]) {
+      if (next === map) next = { ...map };
+      next[`!drop:${w}`] = '1';
+    }
+  });
+  return next;
 };

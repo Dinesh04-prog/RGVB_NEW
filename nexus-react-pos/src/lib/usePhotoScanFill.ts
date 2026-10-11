@@ -7,7 +7,7 @@ import {
   formatScanDetails, isAndroidScanAvailable, onProductScan, startProductScan, takePendingScanResult,
   type ProductScanResult,
 } from './androidScan';
-import { buildInventoryWordMap, findDuplicate, learnFromCorrection, type NameMaps, type WordMap } from './itemNames';
+import { buildInventoryWordMap, findDuplicate, learnDroppedWords, learnFromCorrection, type NameMaps, type WordMap } from './itemNames';
 import { fillItemFromScan, scanReadNothing, type FillableItem, type FillField } from './photoFill';
 
 const LEARNED_KEY = 'photo_name_map';
@@ -66,6 +66,7 @@ export function usePhotoScanFill<T extends FillableItem>({ item, setItem, invent
         : scanReadNothing(result) ? 'फोटोवरून काही वाचता आले नाही — रकाने हाताने भरा.'
         : out.filled.length === 0 ? 'रिकामे रकाने नव्हते — काहीही बदलले नाही.'
         : result.offStatus === 'error' ? 'इंटरनेट / Open Food Facts उपलब्ध नाही — फक्त फोटोवरून भरले.'
+        : out.nameUnsure ? 'नाव लहान करताना खात्री नाही — कृपया नाव तपासा.'
         : '';
       setSession({
         forId: cur.id, busy: false, notice, result,
@@ -119,8 +120,9 @@ export function usePhotoScanFill<T extends FillableItem>({ item, setItem, invent
     /** after a successful save: remember corrected word pairs (local only) */
     onSaved: (saved: { name_eng?: string; name_marathi?: string; name: string }) => {
       if (s.autoNames) {
-        const next = learnFromCorrection(learned, s.autoNames,
-          { name_eng: saved.name_eng || '', name_marathi: saved.name_marathi || saved.name || '' });
+        const finalNames = { name_eng: saved.name_eng || '', name_marathi: saved.name_marathi || saved.name || '' };
+        // word pairs the user corrected, and words the user removed (dropped again next time)
+        const next = learnDroppedWords(learnFromCorrection(learned, s.autoNames, finalNames), s.autoNames, finalNames);
         if (next !== learned) {
           setLearned(next);
           localforage.setItem(LEARNED_KEY, next).catch(() => {});

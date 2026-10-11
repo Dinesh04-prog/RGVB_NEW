@@ -23,6 +23,7 @@ export interface InventoryItem {
   net_qty?: string;      // pack size, e.g. "250 g"
   expiry_date?: string;  // ISO yyyy-MM-dd
   mfg_date?: string;     // ISO yyyy-MM-dd
+  full_name_eng?: string; // long name read from the pack (search only; name/name_eng hold the short name)
 }
 
 export interface ReviewSession {

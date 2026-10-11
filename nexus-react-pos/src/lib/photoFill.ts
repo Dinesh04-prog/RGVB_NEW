@@ -9,7 +9,7 @@
 //    for an existing item without one, it is filled here.
 
 import type { ProductScanResult } from './androidScan';
-import { composeNames, makeSearchKey, normalizeEngName, normalizeMarathiName, type NameMaps } from './itemNames';
+import { makeSearchKey, shortBilingualName, type NameMaps } from './itemNames';
 
 export interface FillableItem {
   id: string;
@@ -25,18 +25,21 @@ export interface FillableItem {
   net_qty?: string;
   expiry_date?: string;
   mfg_date?: string;
+  full_name_eng?: string;
 }
 
 /** Fields the popup shows (yellow when auto-filled) plus hidden item fields. */
 export type FillField =
   | 'name' | 'barcode' | 'purchase_price' | 'price' | 'unit'
-  | 'name_eng' | 'brand' | 'net_qty' | 'expiry_date' | 'mfg_date' | 'search_key';
+  | 'name_eng' | 'full_name_eng' | 'brand' | 'net_qty' | 'expiry_date' | 'mfg_date' | 'search_key';
 
 export interface FillOutcome<T> {
   item: T;
   filled: FillField[];
   /** names as suggested, for learnFromCorrection() after the user edits and saves */
   autoNames: { name_eng: string; name_marathi: string };
+  /** the short name was a guess (unusual product): ask the user to check it */
+  nameUnsure: boolean;
 }
 
 /** The popup's default unit for a new item. */
@@ -55,12 +58,13 @@ export const fillItemFromScan = <T extends FillableItem>(
   const filled: FillField[] = [];
   const free = (f: FillField, isEmpty: boolean) => isEmpty && !opts.touched.has(f);
 
-  const names = composeNames(
+  // Short receipt names (SHORT_NAME_LIMITS), Marathi built word by word from the short English name
+  const names = shortBilingualName(
     { brand: scan.brand, productEng: scan.name_eng, productDev: scan.name_marathi, netQty: scan.net_qty },
     maps,
   );
-  const nameEng = names.name_eng ? normalizeEngName(names.name_eng) : '';
-  const nameMr = names.name_marathi ? normalizeMarathiName(names.name_marathi) : '';
+  const nameEng = names.name_eng;
+  const nameMr = names.name_marathi;
 
   // The popup's single name box edits name + name_marathi together
   if (nameMr && free('name', emptyStr(item.name_marathi) && emptyStr(item.name))) {
@@ -73,6 +77,11 @@ export const fillItemFromScan = <T extends FillableItem>(
   if (nameEng && filled.includes('name') && free('name_eng', emptyStr(item.name_eng))) {
     next.name_eng = nameEng;
     filled.push('name_eng');
+    // the long pack name is kept for search and reference
+    if (names.full_name_eng && free('full_name_eng', emptyStr(item.full_name_eng))) {
+      next.full_name_eng = names.full_name_eng;
+      filled.push('full_name_eng');
+    }
   }
   if (scan.brand && free('brand', emptyStr(item.brand))) { next.brand = scan.brand.trim(); filled.push('brand'); }
   if (scan.barcode && free('barcode', emptyStr(item.barcode))) { next.barcode = scan.barcode; filled.push('barcode'); }
@@ -101,6 +110,7 @@ export const fillItemFromScan = <T extends FillableItem>(
     item: next,
     filled,
     autoNames: { name_eng: next.name_eng || '', name_marathi: next.name_marathi || next.name || '' },
+    nameUnsure: filled.includes('name') && names.unsure,
   };
 };
 
