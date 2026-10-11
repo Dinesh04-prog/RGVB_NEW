@@ -141,6 +141,39 @@ for (const o of samplesSaved) {
   check(`saved ${o.id} search_key convention`, o.search_key === makeSearchKey(o.name_eng, o.name_marathi), o.search_key);
   check(`saved ${o.id} no undefined`, !Object.values(o).some(v => v === undefined));
 }
+// ── Strict saved-name checks: exact strings, no lost characters or glued words ──
+const DEV_BRAND: Record<string, string[]> = {
+  'parle-g': ['पारले-जी'], tata: ['टाटा'], fortune: ['फॉर्च्यून', 'फर्च्यून'], 'red label': ['रेड लेबल'], colgate: ['कोलगेट'],
+};
+const strict: { brand: string; product: string; qty: string; eng: string; mr: string }[] = [
+  { brand: 'Parle-G', product: 'Original Gluco Biscuits', qty: '250 g', eng: 'parle-g original gluco biscuits 250g', mr: 'पारले-जी ओरिजिनल ग्लुको बिस्किट २५० ग्रॅम' },
+  { brand: 'Tata', product: 'Salt', qty: '1 kg', eng: 'tata salt 1kg', mr: 'टाटा मीठ १ किलो' },
+  { brand: 'Fortune', product: 'Refined Sunflower Oil', qty: '1 L', eng: 'fortune refined sunflower oil 1ltr', mr: 'फॉर्च्यून रिफाइंड सूर्यफूल तेल १ लिटर' },
+  { brand: 'Red Label', product: 'Tea', qty: '250 g', eng: 'red label tea 250g', mr: 'रेड लेबल चहा २५० ग्रॅम' },
+  { brand: 'Colgate', product: 'Strong Teeth Toothpaste', qty: '200 g', eng: 'colgate strong teeth toothpaste 200g', mr: 'कोलगेट स्ट्राँग टीथ टूथपेस्ट २०० ग्रॅम' },
+  // brand already inside the product name, and brand twice → still exactly one brand
+  { brand: 'Tata', product: 'Tata Salt', qty: '1 kg', eng: 'tata salt 1kg', mr: 'टाटा मीठ १ किलो' },
+  { brand: 'Parle-G', product: 'Parle-G Original Gluco Biscuits Parle-G', qty: '250 g', eng: 'parle-g original gluco biscuits 250g', mr: 'पारले-जी ओरिजिनल ग्लुको बिस्किट २५० ग्रॅम' },
+  { brand: 'Fortune', product: 'FORTUNE refined sunflower oil', qty: '1 L', eng: 'fortune refined sunflower oil 1ltr', mr: 'फॉर्च्यून रिफाइंड सूर्यफूल तेल १ लिटर' },
+];
+for (const c of strict) {
+  const o = buildPhotoItem(formFor(c.brand, c.product, c.qty, '10'), 'INV-strict');
+  const tag = `strict [${c.brand} + ${c.product}]`;
+  eq(`${tag} name_eng exact`, o.name_eng, c.eng);
+  eq(`${tag} name_marathi exact`, o.name_marathi, c.mr);
+  eq(`${tag} name === name_marathi`, o.name, o.name_marathi);
+  for (const [field, s] of [['name_eng', o.name_eng], ['name_marathi', o.name_marathi]] as const) {
+    check(`${tag} ${field} single spaces, trimmed`, !/\s{2,}|^\s|\s$/.test(s) && !/[\t ​-‍]/.test(s), JSON.stringify(s));
+  }
+  const brandMr = DEV_BRAND[c.brand.toLowerCase()];
+  check(`${tag} whole Marathi brand word`, brandMr.some(b => o.name_marathi.split(' ').slice(0, b.split(' ').length).join(' ') === b), o.name_marathi);
+  check(`${tag} brand appears once`, o.name_eng.split(c.brand.toLowerCase()).length === 2, o.name_eng);
+  // Generic guard: every word of the cleaned English input is a whole word of name_eng
+  const words = `${c.brand} ${c.product}`.toLowerCase().split(/\s+/).filter(Boolean);
+  const engWords = new Set(o.name_eng.split(' '));
+  for (const w of words) check(`${tag} keeps word "${w}"`, engWords.has(w), o.name_eng);
+}
+
 // User-typed names are normalized on save
 eq('normalize eng', normalizeEngName('Parle-G  Biscuits 250 G'), 'parle-g biscuits 250g');
 eq('normalize eng litre', normalizeEngName('Fortune Oil 1 L'), 'fortune oil 1ltr');
