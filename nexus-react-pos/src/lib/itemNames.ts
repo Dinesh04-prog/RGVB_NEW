@@ -70,7 +70,7 @@ export const BRAND_MARATHI: WordMap = {
   'pravin': 'प्रवीण', 'suhana': 'सुहाना', 'ramdev': 'रामदेव', 'bikaji': 'बिकाजी', 'pepsodent': 'पेप्सोडेंट',
   'close up': 'क्लोज अप', 'sensodyne': 'सेन्सोडाइन', 'harpic': 'हार्पिक', 'lizol': 'लायझॉल',
   'nivea': 'निव्हिया', "pond's": 'पॉन्ड्स', 'ponds': 'पॉन्ड्स', 'vaseline': 'व्हॅसलीन', 'boroline': 'बोरोलीन',
-  'vicks': 'विक्स', 'zandu': 'झंडू', 'iodex': 'आयोडेक्स', 'moov': 'मूव्ह', 'dabur amla': 'डाबर आवळा',
+  'vicks': 'व्हिक्स', 'zandu': 'झंडू', 'iodex': 'आयोडेक्स', 'moov': 'मूव्ह', 'dabur amla': 'डाबर आवळा',
 };
 
 /** Common packaged-goods words not in HINGLISH_TO_MARATHI (shop-style spellings). */
@@ -109,6 +109,19 @@ export const PRODUCT_PHRASES: WordMap = {
   'chole masala': 'छोले मसाला', 'amul butter': 'अमूल बटर', 'moong dal namkeen': 'मूग डाळ नमकीन',
   // shop spellings that beat the dictionary meaning (inventory.json writes आटा, not गव्हाचे)
   'atta': 'आटा', 'chakki atta': 'चक्की आटा', 'dolo': 'डोलो',
+  // medicines / OTC
+  'neomycin': 'निओमायसिन', 'betadine': 'बीटाडीन', 'soframycin': 'सोफ्रामायसिन', 'vicks': 'व्हिक्स',
+  'vaporub': 'व्हेपोरब', 'vicks vaporub': 'व्हिक्स व्हेपोरब', 'diclofenac': 'डायक्लोफेनॅक', 'crocin': 'क्रोसिन',
+  'volini': 'व्होलिनी', 'iodex': 'आयोडेक्स', 'moov': 'मूव्ह', 'zandu balm': 'झंडू बाम', 'eno': 'इनो',
+  'paracetamol': 'पॅरासिटामॉल', 'disprin': 'डिस्प्रिन', 'saridon': 'सॅरिडॉन', 'savlon': 'सॅव्हलॉन',
+  'boroplus': 'बोरोप्लस', 'burnol': 'बर्नॉल', 'digene': 'डायजीन', 'hajmola': 'हाजमोला', 'pudin hara': 'पुदीन हरा',
+  'strepsils': 'स्ट्रेप्सिल्स', 'electral': 'इलेक्ट्रॉल', 'chyawanprash': 'च्यवनप्राश', 'glucon-d': 'ग्लुकॉन-डी',
+  // brands / variants
+  'rajwadi': 'राजवाडी', 'kesh kanti': 'केश कांती', 'intensive care': 'इंटेन्सिव्ह केअर', 'easy wash': 'ईझी वॉश',
+  'natural care': 'नॅचरल केअर', 'dark fantasy': 'डार्क फँटसी', 'tiger glucose': 'टायगर ग्लुकोज',
+  'nutri choice': 'न्यूट्री चॉइस', 'little hearts': 'लिटल हार्ट्स', 'magic masala': 'मॅजिक मसाला',
+  'fair & lovely': 'फेअर अँड लव्हली', 'glow & lovely': 'ग्लो अँड लव्हली', 'five star': 'फाइव्ह स्टार',
+  'jim jam': 'जिम जॅम', 'tea premium': 'टी प्रीमियम', 'tea gold': 'टी गोल्ड', 'premium': 'प्रीमियम', 'natural': 'नॅचरल',
 };
 
 /** Hindi spellings OCR often reads from packs → Marathi shop spelling. */
@@ -495,6 +508,7 @@ export const FILLER_WORDS = new Set([
   'finest', 'rich', 'tasty', 'delicious', 'healthy', 'improved', 'perfect', 'genuine', 'authentic', 'traditional',
   'homestyle', 'real', 'true', 'nutritious', 'wholesome', 'goodness', 'trusted', 'favourite', 'favorite',
   'vacuum', 'evaporated', 'iodised', 'iodized', 'free-flowing', 'flowing', 'grade', 'export', 'imported', 'compounded',
+  'germ', 'protection',   // tagline words ("germ protection")
   // packs and labels
   'family', 'value', 'pack', 'combo', 'approx', 'net', 'wt', 'weight', 'qty', 'quantity', 'contents', 'content',
   // glue words
@@ -552,7 +566,22 @@ export const NON_IDENTITY_BRANDS = new Set([
 ]);
 
 /** Sub-brands that carry the identity on their own: the parent brand is dropped ("britannia good day" → "good day"). */
-export const SUB_BRANDS = ['good day', 'marie gold', 'milk bikis', 'bourbon', 'hide & seek', 'dairy milk', 'red label', 'dolo'];
+export const SUB_BRANDS = [
+  'good day', 'marie gold', 'milk bikis', 'bourbon', 'hide & seek', 'dairy milk', 'red label', 'dolo', 'dark fantasy',
+  'tiger glucose', 'nutri choice', 'little hearts', 'five star', 'fair & lovely', 'glow & lovely', 'jim jam',
+];
+
+/**
+ * Variant names that stay WITH the brand and are never split ("patanjali kesh kanti", "surf excel easy wash").
+ * If brand + variant + size fits, the brand and variant are the identity and the type word may go.
+ */
+export const VARIANT_PHRASES = [
+  'kesh kanti', 'intensive care', 'easy wash', 'quick wash', 'natural care', 'magic masala', 'masala munch',
+  'strong teeth', 'active salt', 'max fresh', 'total 10', 'tea premium', 'tea gold',
+];
+
+/** Normally fillers, but kept (as soft words) right after the brand: "Tata Tea Premium", "Wagh Bakri Premium". */
+const KEEP_AFTER_BRAND = new Set(['natural', 'premium']);
 
 /** The brand already says what the product is, so the type word may go when space is short. */
 export const BRAND_IMPLIES: Record<string, string> = {
@@ -589,7 +618,7 @@ export interface ShortName {
   unsure: boolean;
 }
 
-interface Tok { w: string; kind: 'sub' | 'type' | 'soft' | 'num' | 'word' }
+interface Tok { w: string; kind: 'sub' | 'variant' | 'type' | 'soft' | 'num' | 'word' }
 
 const escRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -647,13 +676,22 @@ export const shortenProductName = (
   for (let i = 0; i < words.length; i++) {
     const two = `${words[i]} ${words[i + 1] ?? ''}`.trim();
     const three = `${two} ${words[i + 2] ?? ''}`.trim();
-    const sub = SUB_BRANDS.find(sb => sb === words[i] || sb === two || sb === three);
-    if (sub) {
-      if (!seen.has(sub)) { toks.push({ w: sub, kind: 'sub' }); seen.add(sub); }
-      i += sub.split(' ').length - 1;
+    const match = (list: string[]) => list.find(x => x === words[i] || x === two || x === three);
+    const sub = match(SUB_BRANDS);
+    const variant = sub ? undefined : match(VARIANT_PHRASES);
+    if (sub || variant) {
+      const phrase = (sub || variant)!;
+      if (!seen.has(phrase)) { toks.push({ w: phrase, kind: sub ? 'sub' : 'variant' }); seen.add(phrase); }
+      i += phrase.split(' ').length - 1;
       continue;
     }
     const w = SINGULAR[words[i]] ?? words[i];
+    const firstIsType = TYPE_WORDS.has(SINGULAR[words[0]] ?? words[0]);
+    if (KEEP_AFTER_BRAND.has(w) && brandLc && (i === 0 || (i === 1 && firstIsType)) && !seen.has(w)) {
+      seen.add(w);
+      toks.push({ w, kind: 'soft' });   // kept, but the first to go when the name is too long
+      continue;
+    }
     if (FILLER_WORDS.has(w) || PHARMA_SUFFIXES.has(w) || COMPANY_WORDS.has(w) || learnedDrops.has(w)) { dropped.push(w); continue; }
     if (seen.has(w)) { dropped.push(w); continue; }   // repeated word ("salt … salt")
     seen.add(w);
@@ -670,11 +708,19 @@ export const shortenProductName = (
     dropped.push(keepBrand); keepBrand = null;
   }
 
+  // Brand (or sub-brand) + variant is the identity when it fits; otherwise the variant is ordinary words
+  const variantToks = toks.filter(t => t.kind === 'variant');
+  const identityLen = [keepBrand, ...toks.filter(t => t.kind === 'sub' || t.kind === 'variant').map(t => t.w), size]
+    .filter(Boolean).join(' ').length;
+  const identityVariant = variantToks.length > 0 && (!!keepBrand || hasSub) && identityLen <= limit;
+  if (!identityVariant) variantToks.forEach(t => { t.kind = 'word'; });
+
   // Core word: the product type, unless the brand already implies it; else the first name word
   const implied = keepBrand ? BRAND_IMPLIES[keepBrand] : undefined;
   const typeTok = toks.find(t => t.kind === 'type' && t.w !== implied);
   // When the brand alone says what the product is (Colgate, Head & Shoulders), the brand is the core
-  const core = typeTok?.w
+  // A fitting brand + variant ("surf excel easy wash") is the core itself
+  const core = identityVariant ? null : typeTok?.w
     ?? (implied ? null : toks.find(t => t.kind === 'sub' || t.kind === 'word' || t.kind === 'num')?.w)
     ?? (implied ? null : toks.find(t => t.kind === 'type')?.w) ?? null;
 
@@ -693,7 +739,7 @@ export const shortenProductName = (
   // 1) soft adjectives  2) the type word the brand implies  3) other words from the end (marks unsure)
   while (tooLong() && drop(t => t.kind === 'soft', false)) { /* keep dropping */ }
   if (tooLong() && implied) drop(t => t.w === implied);
-  while (tooLong() && drop(t => t.kind === 'word' || t.kind === 'type')) unsure = true;
+  while (tooLong() && drop(t => t.kind === 'word' || t.kind === 'type')) unsure = unsure || !identityVariant;
   if (tooLong() && keepBrand) { dropped.push(keepBrand); keepBrand = null; unsure = true; }
   while (tooLong() && drop(() => true)) unsure = true;
 

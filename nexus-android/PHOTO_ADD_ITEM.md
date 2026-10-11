@@ -65,6 +65,11 @@ The long pack text is kept in `full_name_eng`, which is searchable (Fuse weight 
   Marathi counts **printed letters** (matras, virama, nukta and anusvara share a column), both including the size.
 * **Kept:** the brand when it is the product's identity, the core product word, the variant that matters, and the size.
   The parent brand is dropped when a sub-brand carries the name ("britannia good day" → "good day").
+  `VARIANT_PHRASES` (kesh kanti, intensive care, easy wash, natural care, strong teeth, total 10, tea premium…) stay
+  together with the brand; when brand + variant + size fits the limit, that is the core and the type word may go.
+  "natural" and "premium" are kept right after the brand (Tata Tea Premium) and dropped elsewhere.
+* **Marathi spellings:** medicines, OTC brands and variants have built-in spellings in `PRODUCT_PHRASES`
+  (निओमायसिन, बीटाडीन, व्हिक्स व्हेपोरब, डायक्लोफेनॅक, क्रोसिन, झंडू बाम, इनो…); unknown words are transliterated and need a check.
   Makers that are not the identity (Cipla, HUL, ITC…) are dropped.
 * **Always dropped:** `FILLER_WORDS` (original, premium, classic, new, special, pure, natural, fresh, family/value pack,
   combo, with, net wt, approx, vacuum/evaporated/iodised, compounded…), `PHARMA_SUFFIXES` (sulphate, hydrochloride,

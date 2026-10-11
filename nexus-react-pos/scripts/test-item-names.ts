@@ -252,12 +252,12 @@ const shortCases: ShortCase[] = [
   { brand: 'Sunfeast', pack: 'Marie Light Oats', qty: '150 g', eng: 'sunfeast marie oats 150g', mr: 'सनफीस्ट मारी ओट्स १५० ग्रॅम', core: 'oats' },
   { brand: 'Saffola', pack: 'Gold Pro Healthy Lifestyle Edible Oil', qty: '5 L', eng: 'saffola gold oil 5l', mr: 'सफोला गोल्ड तेल ५ लिटर', core: 'oil' },
   { brand: 'Lux', pack: 'Soft Glow Rose & Vitamin E Soap', qty: '100 g', eng: 'lux soft glow 100g', mr: 'लक्स सॉफ्ट ग्लो १०० ग्रॅम', core: 'lux' },
-  { brand: 'Lifebuoy', pack: 'Total 10 Germ Protection Soap', qty: '125 g', eng: 'lifebuoy total 10 125g', mr: 'लाइफबॉय टोटल १० १२५ ग्रॅम', core: 'lifebuoy' },
+  { brand: 'Lifebuoy', pack: 'Total 10 Germ Protection Soap', qty: '125 g', eng: 'lifebuoy total 10 soap 125g', mr: 'लाइफबॉय टोटल १० साबण १२५ ग्रॅम', core: 'lifebuoy' },
   { brand: 'Dettol', pack: 'Original Liquid Handwash', qty: '200 ml', eng: 'dettol liquid handwash 200ml', mr: 'डेटॉल लिक्विड हँड वॉश २०० मिली', core: 'liquid' },
   { brand: 'Clinic Plus', pack: 'Strength & Shine Shampoo', qty: '6 ml', eng: 'clinic plus strength 6ml', mr: 'क्लिनिक प्लस स्ट्रेंथ ६ मिली', core: 'clinic plus' },
   { brand: 'Head & Shoulders', pack: 'Anti-Dandruff Shampoo Smooth & Silky', qty: '340 ml', eng: 'head & shoulders 340ml', mr: 'हेड अँड शोल्डर्स ३४० मिली', core: 'head & shoulders' },
   { brand: 'Brooke Bond', pack: 'Red Label Natural Care Tea', qty: '250 g', eng: 'red label natural care 250g', mr: 'रेड लेबल नॅचरल केअर २५० ग्रॅम', core: 'red label' },
-  { brand: 'Tata', pack: 'Tea Premium', qty: '500 g', eng: 'tata tea 500g', mr: 'टाटा चहा ५०० ग्रॅम', core: 'tea' },
+  { brand: 'Tata', pack: 'Tea Premium', qty: '500 g', eng: 'tata tea premium 500g', mr: 'टाटा टी प्रीमियम ५०० ग्रॅम', core: 'tata' },
   { brand: 'Wagh Bakri', pack: 'Premium Leaf Tea', qty: '500 g', eng: 'wagh bakri leaf tea 500g', mr: 'वाघ बकरी लीफ चहा ५०० ग्रॅम', core: 'tea' },
   { brand: 'Everest', pack: 'Turmeric Powder', qty: '100 g', eng: 'everest turmeric powder 100g', mr: 'एव्हरेस्ट हळद पावडर १०० ग्रॅम', core: 'powder' },
   { brand: 'MDH', pack: 'Garam Masala', qty: '100 g', eng: 'mdh garam masala 100g', mr: 'एमडीएच गरम मसाला १०० ग्रॅम', core: 'masala' },
@@ -270,7 +270,7 @@ const shortCases: ShortCase[] = [
   { brand: 'Micro Labs', pack: 'Dolo 650 Tablets', qty: '', eng: 'dolo 650 tablet', mr: 'डोलो ६५० टॅबलेट', core: 'tablet' },
   { brand: '', pack: 'Betadine Povidone-Iodine Ointment USP', qty: '20 g', eng: 'betadine ointment 20g', mr: 'बीटाडीन मलम २० ग्रॅम', core: 'ointment' },
   { brand: '', pack: 'Soframycin Framycetin Sulphate Cream', qty: '30 g', eng: 'soframycin cream 30g', mr: 'सोफ्रामायसिन क्रीम ३० ग्रॅम', core: 'cream' },
-  { brand: 'Vicks', pack: 'VapoRub Balm', qty: '25 ml', eng: 'vicks vaporub balm 25ml', mr: 'विक्स व्हेपोरब बाम २५ मिली', core: 'balm' },
+  { brand: 'Vicks', pack: 'VapoRub Balm', qty: '25 ml', eng: 'vicks vaporub balm 25ml', mr: 'व्हिक्स व्हेपोरब बाम २५ मिली', core: 'balm' },
   { brand: 'Nivea', pack: 'Soft Light Moisturising Cream', qty: '100 ml', eng: 'nivea soft cream 100ml', mr: 'निव्हिया सॉफ्ट क्रीम १०० मिली', core: 'cream' },
   { brand: 'Vaseline', pack: 'Intensive Care Deep Restore Body Lotion', qty: '400 ml', eng: 'vaseline intensive care 400ml', mr: 'व्हॅसलीन इंटेन्सिव्ह केअर ४०० मिली', core: 'vaseline' },
   { brand: 'Surf Excel', pack: 'Easy Wash Detergent Powder', qty: '1 kg', eng: 'surf excel easy wash 1kg', mr: 'सर्फ एक्सेल ईझी वॉश १ किलो', core: 'surf excel' },
@@ -324,8 +324,24 @@ for (const c of shortCases) {
 }
 console.log(`English good: ${engGood}/${shortCases.length}   Marathi good: ${mrGood}/${shortCases.length}   both good: ${bothGood}/${shortCases.length}`);
 console.log('Need a manual fix:\n  ' + fixes.join('\n  '));
-check('short names: English floor', engGood >= 33, `${engGood}`);
-check('short names: Marathi floor', mrGood >= 27, `${mrGood}`);
+check('short names: English floor', engGood >= 36, `${engGood}`);
+check('short names: Marathi floor', mrGood >= 36, `${mrGood}`);
+
+// Variant phrases stay with the brand; natural / premium only kept right after the brand
+const sb = (brand: string, pack: string, qty: string) => shortBilingualName({ brand, productEng: pack, netQty: qty }, maps);
+eq('variant kept with brand (Tata Tea Gold)', sb('Tata', 'Tea Gold', '250 g').name_eng, 'tata tea gold 250g');
+eq('variant kept with brand (Surf Excel Quick Wash)', sb('Surf Excel', 'Quick Wash Detergent Powder', '500 g').name_eng, 'surf excel quick wash 500g');
+eq('sub-brand replaces parent (Dark Fantasy)', sb('Sunfeast', 'Dark Fantasy Choco Fills', '75 g').name_eng, 'dark fantasy choco fills 75g');
+check('natural kept right after brand', sb('Saffola', 'Natural Honey', '250 g').name_eng.includes('natural'), sb('Saffola', 'Natural Honey', '250 g').name_eng);
+check('natural dropped elsewhere', !sb('Himalaya', 'Neem Natural Face Wash', '100 ml').name_eng.includes('natural'), sb('Himalaya', 'Neem Natural Face Wash', '100 ml').name_eng);
+check('premium dropped when not after brand', !sb('Parle-G', 'Gluco Premium Biscuits', '250 g').name_eng.includes('premium'));
+eq('variant too long for the limit is not protected (Vaseline Intensive Care = 29 chars)', sb('Vaseline', 'Intensive Care Deep Restore Body Lotion', '400 ml').name_eng, 'vaseline lotion 400ml');
+
+// Built-in medicine / brand Marathi spellings
+eq('medicine spellings', ['crocin', 'eno', 'volini', 'iodex', 'zandu balm', 'paracetamol'].map(w => englishToMarathi(w, maps).text),
+  ['क्रोसिन', 'इनो', 'व्होलिनी', 'आयोडेक्स', 'झंडू बाम', 'पॅरासिटामॉल']);
+eq('short medicine name in Marathi', sb('', 'Crocin Tablets', '').name_marathi, 'क्रोसिन टॅबलेट');
+eq('medicine variant kept (Crocin Advance)', sb('', 'Crocin Advance Tablets', '').name_eng, 'crocin advance tablet');
 
 // Full long name is kept and searchable
 const neo = shortBilingualName({ productEng: 'Neomycin Sulphate Cream USP', netQty: '10 g' }, maps);
