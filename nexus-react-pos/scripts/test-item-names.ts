@@ -3,8 +3,10 @@
 import { readFileSync } from 'node:fs';
 import {
   makeSearchKey, qtyEng, qtyMarathi, buildInventoryWordMap, composeNames,
-  learnFromCorrection, findDuplicate, marathiToEnglish, englishToMarathi, type NameMaps,
+  learnFromCorrection, findDuplicate, marathiToEnglish, englishToMarathi, buildPhotoItem,
+  normalizeEngName, normalizeMarathiName, type NameMaps,
 } from '../src/lib/itemNames';
+import { formatScanDetails } from '../src/lib/androidScan';
 
 let failures = 0;
 const check = (label: string, cond: boolean, detail = '') => {
@@ -69,7 +71,7 @@ for (const c of cases) {
   console.log(`${good ? 'ok     ' : 'FIX    '} | ${r.name_eng} | ${r.name_marathi} | ${r.mrPhonetic.join(', ')}${good ? '' : `   (want ${c.ok[0]})`}`);
 }
 console.log(`Marathi correct/acceptable: ${correct}/${cases.length}\n`);
-check('bilingual accuracy floor', correct >= 15, `${correct}/${cases.length}`);
+check('bilingual accuracy floor', correct >= 20, `${correct}/${cases.length}`);
 
 // Name_eng follows shop style: lowercase, brand inside, size glued
 eq('name_eng style', composeNames({ brand: 'Parle-G', productEng: 'Parle-G Original Gluco Biscuits', netQty: '250 g' }, maps).name_eng,
@@ -110,6 +112,57 @@ eq('dup by barcode', findDuplicate({ barcode: '8901719101038' }, inv)?.item.id, 
 eq('dup by name + size (old item without net_qty)', findDuplicate({ name_eng: 'society 250g', net_qty: '250 g' }, inv)?.item.id, 'B');
 eq('dup by marathi name + size', findDuplicate({ name_marathi: 'टाटा मीठ १ किलो', net_qty: '1 kg' }, inv)?.item.id, 'C');
 eq('different size is not dup', findDuplicate({ name_eng: 'tata salt 1kg', net_qty: '500 g' }, inv), null);
+
+// ── Product-name phrases win over literal word translation ──────────────────
+eq('phrase aloo bhujia', englishToMarathi('aloo bhujia', maps).text, 'आलू भुजिया');
+eq('phrase dairy milk', englishToMarathi('cadbury dairy milk', maps).text, 'कॅडबरी डेअरी मिल्क');
+eq('phrase milk bikis', englishToMarathi('britannia milk bikis', maps).text, 'ब्रिटानिया मिल्क बिकीस');
+eq('phrase pav bhaji masala', englishToMarathi('everest pav bhaji masala', maps).text, 'एव्हरेस्ट पावभाजी मसाला');
+eq('plain milk still translated', englishToMarathi('milk', maps).text, 'दूध');
+
+// ── Saved objects use the shop style ─────────────────────────────────────────
+const formFor = (brand: string, product: string, qty: string, mrp: string, barcode = '') => {
+  const n = composeNames({ brand, productEng: product, netQty: qty }, maps);
+  return {
+    name_marathi: n.name_marathi, name_eng: n.name_eng, brand, unit: 'pcs', net_qty: qty,
+    mrp, price: mrp, stock: '12', barcode, expiry_date: '2026-07-12', mfg_date: '2026-01-12',
+  };
+};
+const samplesSaved = [
+  buildPhotoItem(formFor('Parle-G', 'Original Gluco Biscuits', '250 g', '10', '8901719101038'), 'INV-1760000000001'),
+  buildPhotoItem(formFor('Tata', 'Salt', '1 kg', '28'), 'INV-1760000000002'),
+  buildPhotoItem(formFor('Fortune', 'Refined Sunflower Oil', '1 L', '185'), 'INV-1760000000003'),
+];
+console.log('Sample saved objects:\n' + samplesSaved.map(o => JSON.stringify(o, null, 2)).join('\n'));
+for (const o of samplesSaved) {
+  check(`saved ${o.id} name_eng lowercase + size glued`, o.name_eng === o.name_eng.toLowerCase() && /\d(g|kg|ml|ltr)$/.test(o.name_eng), o.name_eng);
+  check(`saved ${o.id} name = name_marathi, Devanagari size`, o.name === o.name_marathi && /[०-९]+ (ग्रॅम|किलो|मिली|लिटर)$/.test(o.name_marathi), o.name_marathi);
+  check(`saved ${o.id} brand kept`, !!o.brand && o.name_eng.startsWith(o.brand.toLowerCase()), String(o.brand));
+  check(`saved ${o.id} search_key convention`, o.search_key === makeSearchKey(o.name_eng, o.name_marathi), o.search_key);
+  check(`saved ${o.id} no undefined`, !Object.values(o).some(v => v === undefined));
+}
+// User-typed names are normalized on save
+eq('normalize eng', normalizeEngName('Parle-G  Biscuits 250 G'), 'parle-g biscuits 250g');
+eq('normalize eng litre', normalizeEngName('Fortune Oil 1 L'), 'fortune oil 1ltr');
+eq('normalize marathi', normalizeMarathiName('पारले बिस्किट 250 g'), 'पारले बिस्किट २५० ग्रॅम');
+eq('normalize marathi kg', normalizeMarathiName('टाटा मीठ 1kg'), 'टाटा मीठ १ किलो');
+
+// ── "Copy details" text ──────────────────────────────────────────────────────
+const scanBase = {
+  name_eng: 'Original Gluco Biscuits', name_marathi: null, brand: 'Parle-G', unit: 'pcs', net_qty: '250 g', mrp: 10,
+  barcode: '8901719101038', barcodeVerified: true, mfg_date: '2026-01-12', expiry_date: null,
+  confidence: { mrp: 0.95, brand: 0.75 }, source: { mrp: 'mlkit-ocr' as const, brand: 'mlkit-ocr' as const },
+  offStatus: 'skipped' as const, frontPhotoDataUrl: 'data:image/jpeg;base64,AAAA', backPhotoDataUrl: null,
+};
+const details = formatScanDetails({ ...scanBase, debug: {
+  ocrBackLatin: '[h22] M.R.P Rs. 1O.OO', ocrFrontDevanagari: '[h30] पारले-जी',
+  barcodeMlkit: { value: '8901719101038', format: 'EAN_13', checksumOk: true, photo: 'back' },
+  parser: { mrp: { value: 10, confidence: 0.95 } }, timingsMs: { total: 1800 },
+} });
+check('details has raw OCR', details.includes('M.R.P Rs. 1O.OO') && details.includes('पारले-जी'));
+check('details has barcode + source/conf', details.includes('EAN_13') && details.includes('mrp: 10 · mlkit-ocr · 0.95'));
+check('details excludes photos', !details.includes('base64'));
+check('details works without debug', formatScanDetails(scanBase).includes('ML Kit: not found'));
 
 if (failures) { console.error(`\n${failures} check(s) failed`); process.exit(1); }
 console.log('All item-name checks passed');

@@ -239,8 +239,30 @@ object LabelParser {
     private data class DateHit(val date: LocalDate, val monthOnly: Boolean, val pos: Int)
 
     /** Returns (mfg, expiry) as ISO strings. */
+    // Inkjet printers space out characters: "1 2 . 0 3 . 2 0 2 6" (single chars, single spaces)
+    private val SPACED_CHARS = Regex("""(?<![\d./\-])[\d./\-](?: [\d./\-]){3,}(?![\d./\-])""")
+    private val DATE_ANCHOR = "(?:${MFG_ANCHOR.pattern}|${EXP_ANCHOR.pattern})"
+    // "MFD 01 26" / "USE BY 12 03 26": space used as the date separator right after an anchor
+    private val ANCHOR_DMY_SPACED = Regex("""($DATE_ANCHOR[\s:.\-]*)(\d{1,2}) (\d{1,2}) (\d{4}|\d{2})(?![\d./\-])""")
+    private val ANCHOR_MY_SPACED = Regex("""($DATE_ANCHOR[\s:.\-]*)(\d{1,2}) (\d{4}|\d{2})(?![\d./\-])""")
+
+    /**
+     * Only on lines that carry an MFG/EXP/BEST BEFORE anchor: collapse spaces between digits and date
+     * separators, and treat "MM YY" / "DD MM YY" right after an anchor as a date. Other lines are untouched.
+     */
+    fun normalizeSpacedDates(line: String): String {
+        if (!MFG_ANCHOR.containsMatchIn(line) && !EXP_ANCHOR.containsMatchIn(line)) return line
+        var l = SPACED_CHARS.replace(line) { m ->
+            val v = m.value.replace(" ", "")
+            if (Regex("""[./\-]""").containsMatchIn(v)) v else m.value   // need a separator to be a date
+        }
+        l = ANCHOR_DMY_SPACED.replace(l) { m -> "${m.groupValues[1]}${m.groupValues[2]}/${m.groupValues[3]}/${m.groupValues[4]}" }
+        l = ANCHOR_MY_SPACED.replace(l) { m -> "${m.groupValues[1]}${m.groupValues[2]}/${m.groupValues[3]}" }
+        return l
+    }
+
     fun parseDates(text: String): Pair<Field<String>, Field<String>> {
-        val lines = text.lines().map { fixDigits(it).uppercase() }
+        val lines = text.lines().map { normalizeSpacedDates(fixDigits(it).uppercase()) }
         var mfg: Field<LocalDate> = Field.none()
         var exp: Field<LocalDate> = Field.none()
         val unanchored = mutableListOf<LocalDate>()

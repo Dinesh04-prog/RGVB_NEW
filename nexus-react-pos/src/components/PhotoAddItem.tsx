@@ -5,11 +5,11 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import localforage from 'localforage';
 import type { InventoryItem } from '../lib/firebase';
 import {
-  onProductScan, startProductScan, takePendingScanResult, type ProductScanResult,
+  onProductScan, startProductScan, takePendingScanResult, formatScanDetails, type ProductScanResult,
 } from '../lib/androidScan';
 import {
   buildInventoryWordMap, composeNames, englishToMarathi, marathiToEnglish, findDuplicate,
-  learnFromCorrection, makeSearchKey, type NameMaps, type WordMap,
+  learnFromCorrection, makeSearchKey, buildPhotoItem, type NameMaps, type WordMap,
 } from '../lib/itemNames';
 
 const LEARNED_KEY = 'photo_name_map';
@@ -35,6 +35,22 @@ interface Props {
   onOpenExisting: (item: InventoryItem) => void;
 }
 
+/** Clipboard API first; textarea fallback for older Android WebViews. */
+const copyText = async (text: string): Promise<boolean> => {
+  try { await navigator.clipboard.writeText(text); return true; } catch { /* fall back */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch { return false; }
+};
+
 export default function PhotoAddItem({ inventory, onSave, onOpenExisting }: Props) {
   const [scan, setScan] = useState<ProductScanResult | null>(null);
   const [form, setForm] = useState<Form>(EMPTY);
@@ -46,6 +62,8 @@ export default function PhotoAddItem({ inventory, onSave, onOpenExisting }: Prop
   const [saving, setSaving] = useState(false);
   const [batchCount, setBatchCount] = useState(0);
   const [bigPhoto, setBigPhoto] = useState<string | null>(null);
+  const [showDebug, setShowDebug] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const inventoryMap = useMemo(() => buildInventoryWordMap(inventory), [inventory]);
   const maps: NameMaps = useMemo(() => ({ learned, inventory: inventoryMap }), [learned, inventoryMap]);
@@ -108,6 +126,8 @@ export default function PhotoAddItem({ inventory, onSave, onOpenExisting }: Prop
     setAutoNames({ name_eng: names.name_eng, name_marathi: names.name_marathi });
     setKeyTouched(false);
     setBigPhoto(null);
+    setShowDebug(false);
+    setCopied(false);
     setScan(r);
   };
   const openResultRef = useRef(openResult);
@@ -166,27 +186,10 @@ export default function PhotoAddItem({ inventory, onSave, onOpenExisting }: Prop
   const save = async (addNext: boolean) => {
     if (!canSave) return;
     setSaving(true);
-    const stock = Number(form.stock) || 0;
-    const nameMr = form.name_marathi.trim();
-    const nameEn = form.name_eng.trim();
-    // No undefined values: Firestore rejects them.
-    const item: InventoryItem = {
-      id: `INV-${Date.now()}`,
-      name: nameMr || nameEn,
-      name_marathi: nameMr,
-      name_eng: nameEn,
-      search_key: searchKey,
-      unit: form.unit || 'pcs',
-      price,
-      purchase_price: Number(form.mrp) || 0,
-      stock_quantity: stock,
-      stock_qty: stock,
-      barcode: form.barcode.trim(),
-      ...(form.brand.trim() ? { brand: form.brand.trim() } : {}),
-      ...(form.net_qty.trim() ? { net_qty: form.net_qty.trim() } : {}),
-      ...(form.expiry_date ? { expiry_date: form.expiry_date } : {}),
-      ...(form.mfg_date ? { mfg_date: form.mfg_date } : {}),
-    };
+    // Saved in the shop's style: lowercase name_eng with size glued, Devanagari digits/units in Marathi
+    const item: InventoryItem = buildPhotoItem({ ...form, search_key: keyTouched ? form.search_key : '' }, `INV-${Date.now()}`);
+    const nameEn = item.name_eng || '';
+    const nameMr = item.name_marathi || '';
     try {
       await onSave(item);
       const nextLearned = learnFromCorrection(learned, autoNames, { name_eng: nameEn, name_marathi: nameMr });
@@ -352,6 +355,23 @@ export default function PhotoAddItem({ inventory, onSave, onOpenExisting }: Prop
           style={{ width: '100%', minHeight: 48, marginTop: 8, border: '1px solid #ccc', borderRadius: 10, background: 'white', fontWeight: 'bold' }}>
           Cancel
         </button>
+
+        {/* Raw scan details for tuning the parser — collapsed, stays on the phone */}
+        <button onClick={() => setShowDebug(v => !v)}
+          style={{ border: 'none', background: 'transparent', color: '#6c757d', fontSize: '0.75rem', textDecoration: 'underline', marginTop: 10, minHeight: 36, cursor: 'pointer' }}>
+          {showDebug ? 'Hide raw scan details' : 'Show raw scan details'}
+        </button>
+        {showDebug && (
+          <div style={{ marginTop: 4 }}>
+            <button onClick={() => copyText(formatScanDetails(scan)).then(ok => setCopied(ok))}
+              style={{ minHeight: 40, padding: '0 14px', border: '1px solid #ccc', borderRadius: 8, background: '#f8f9fa', fontWeight: 'bold', fontSize: '0.8rem' }}>
+              {copied ? '✓ Copied' : '📋 Copy details'}
+            </button>
+            <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '0.7rem', background: '#f8f9fa', border: '1px solid #eee', borderRadius: 6, padding: 8, marginTop: 6, maxHeight: 300, overflowY: 'auto', fontFamily: 'monospace, "Noto Sans Devanagari"' }}>
+              {formatScanDetails(scan)}
+            </pre>
+          </div>
+        )}
       </div>
     </div>
   );

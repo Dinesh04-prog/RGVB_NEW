@@ -54,6 +54,38 @@ The bundled models add about 2.4 MB (barcode) plus about 4 MB per script per CPU
 `abiFilters 'arm64-v8a', 'armeabi-v7a'` keeps this to about +18–20 MB in total. The CI log prints the final APK size.
 Emulators need an ARM system image because of the ABI filter.
 
+## Raw scan details (for tuning)
+
+The review popup has a small **"Show raw scan details"** link at the bottom (collapsed by default). It shows:
+- raw OCR text per photo (Latin and Devanagari, with box heights);
+- the parser's own values and confidence;
+- the final value, source and confidence for each field;
+- the ML Kit barcode result and the OCR-digit fallback;
+- the Open Food Facts response and timings.
+
+**"📋 Copy details"** copies it as plain text, without photos. Nothing is sent anywhere.
+
+## Testing safely: test items go to the live shop data
+
+The APK is built in CI with the **production** Firebase config (`VITE_FIREBASE_PROJECT_ID: nexus-pos-817c3` in
+`.github/workflows/build-apk.yml`). A Save from the photo flow calls `upsertInventoryItem`, which does this:
+
+1. Updates the phone's in-memory list and IndexedDB cache (`custom_inventory`).
+2. Calls `saveInventoryItemToCloud` → `setDoc(inventory/<id>)` in the production Firestore project.
+3. Every other signed-in device (shop PCs, owner app) gets it right away through `subscribeToInventory`,
+   and the item becomes searchable and billable everywhere.
+
+The Excel auto-sync only runs on a desktop browser that has an Excel file linked. It does not run inside the APK, because Android WebView has no File System Access API.
+
+**Deleting test items:**
+1. Before testing, put **TEST** at the start of the English name (for example `test parle-g 250g`) so test items are easy to find.
+2. To delete in the app: Inventory tab → search "test" → tap the item → **DELETE** (top right of the edit popup) → confirm.
+   This removes it locally and from Firestore (`removeInventoryItemFromCloud`), and other devices update within seconds.
+3. To delete in the Firebase console: project `nexus-pos-817c3` → Firestore → collection `inventory`.
+   Photo-added documents have ids `INV-<timestamp>` and a `net_qty` field; delete the test documents there.
+4. Learned name corrections stay only on that phone (IndexedDB key `photo_name_map`).
+   Clear the app's storage to reset them; they are never uploaded.
+
 ## Phase 2 notes (not built)
 
 **Optional "Try smart read" with Gemini.** Deferred.

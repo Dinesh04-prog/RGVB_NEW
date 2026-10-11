@@ -73,6 +73,20 @@ class LabelParserTest {
         assertEquals("2026-10-12", exp.value)
     }
 
+    @Test fun spacedCharacterDates() {
+        fun dates(s: String) = LabelParser.parseDates(s).let { it.first.value to it.second.value }
+        assertEquals("2026-01-01" to "2027-12-31", dates("MFD O1 26  USE BY 12 27"))
+        assertEquals("2026-03-12" to "2028-03-11", dates("MFD : 1 2 . 0 3 . 2 0 2 6\nEXP : 1 1 . 0 3 . 2 0 2 8"))
+        assertEquals(null to "2027-03-31", dates("EXP 0 3 / 2 0 2 7"))
+        assertEquals("2026-03-15" to null, dates("PKD 15 03 2026"))
+        assertEquals("2025-12-01" to "2027-11-30", dates("MFG. 12 2025 EXP. 11 2027"))
+        // Unchanged: normal dates, and spaced digits with no separator or no anchor are never guessed
+        assertEquals("2025-12-01" to "2027-11-30", dates("Packed on: 12/2025  Expiry: 11/2027"))
+        assertEquals(null to null, dates("PKD 1 2 0 3 2 6"))
+        assertEquals("Net Wt 1 2 . 5 g", LabelParser.normalizeSpacedDates("Net Wt 1 2 . 5 g"))
+        assertEquals("PACKED BY: PLOT NO 12 34", LabelParser.normalizeSpacedDates("PACKED BY: PLOT NO 12 34"))
+    }
+
     @Test fun neverInventsDates() {
         val (mfg, exp) = LabelParser.parseDates("Best before 6 months from packaging")
         assertNull(mfg.value)
@@ -238,7 +252,7 @@ class LabelParserTest {
         println("TOTAL (${n} samples): " + fields.joinToString("  ") { "$it ${pass[it]}/$n" })
 
         // Regression guard: minimum passes per field on this sample set.
-        val min = mapOf("MRP" to 33, "weight" to 33, "MFG" to 31, "EXP" to 31, "brand" to 33, "name" to 33, "barcode" to 34)
+        val min = mapOf("MRP" to 33, "weight" to 33, "MFG" to 34, "EXP" to 34, "brand" to 33, "name" to 33, "barcode" to 34)
         for (fName in fields) {
             assertTrue("$fName accuracy dropped: ${pass[fName]}/$n < ${min[fName]}", pass[fName]!! >= min[fName]!!)
         }

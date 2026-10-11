@@ -89,6 +89,20 @@ export const LOANWORDS: WordMap = {
   'chocolatey': 'चॉकलेटी', 'cashew': 'काजू', 'roasted': 'भाजलेले', 'powder': 'पावडर',
 };
 
+/**
+ * Product names that must be transliterated as a whole, not translated word by word
+ * ("aloo bhujia" is आलू भुजिया on the shelf, not बटाटा भुजिया; "dairy milk" is not दूध).
+ * Checked before the word dictionary.
+ */
+export const PRODUCT_PHRASES: WordMap = {
+  'aloo bhujia': 'आलू भुजिया', 'gokul': 'गोकुळ', 'bhujia sev': 'भुजिया शेव', 'navratan mix': 'नवरत्न मिक्स',
+  'khatta meetha': 'खट्टा मीठा', 'soan papdi': 'सोनपापडी', 'aloo lachha': 'आलू लच्छा', 'chakli': 'चकली',
+  'farsan': 'फरसाण', 'chivda': 'चिवडा', 'bakarwadi': 'बाकरवडी', 'shrikhand': 'श्रीखंड',
+  'gulab jamun': 'गुलाबजाम', 'rasgulla': 'रसगुल्ला', 'kaju katli': 'काजू कतली', 'dairy milk': 'डेअरी मिल्क',
+  'milk bikis': 'मिल्क बिकीस', 'hide & seek': 'हाइड अँड सीक', 'pav bhaji masala': 'पावभाजी मसाला',
+  'chole masala': 'छोले मसाला', 'amul butter': 'अमूल बटर', 'moong dal namkeen': 'मूग डाळ नमकीन',
+};
+
 /** Hindi spellings OCR often reads from packs → Marathi shop spelling. */
 export const HINDI_TO_MARATHI: WordMap = {
   'नमक': 'मीठ', 'चाय': 'चहा', 'घी': 'तूप', 'बिस्कुट': 'बिस्किट', 'साबुन': 'साबण', 'हल्दी': 'हळद',
@@ -160,6 +174,7 @@ export interface NameMaps {
 const lookupPhrase = (phrase: string, maps: NameMaps): [string, WordSource] | null => {
   if (maps.learned[phrase]) return [maps.learned[phrase], 'learned'];
   if (maps.inventory[phrase]) return [maps.inventory[phrase], 'inventory'];
+  if (PRODUCT_PHRASES[phrase]) return [PRODUCT_PHRASES[phrase], 'brand'];
   if (BRAND_MARATHI[phrase]) return [BRAND_MARATHI[phrase], 'brand'];
   if (HINGLISH_TO_MARATHI[phrase]) return [HINGLISH_TO_MARATHI[phrase], 'dictionary'];
   if (LOANWORDS[phrase]) return [LOANWORDS[phrase], 'loanword'];
@@ -232,7 +247,7 @@ export const hindiToMarathi = (dev: string): { text: string; changed: boolean } 
 export const marathiToEnglish = (marathi: string, maps: NameMaps): Translation => {
   const reverse: WordMap = {};
   const add = (m: WordMap) => { for (const [en, mr] of Object.entries(m)) if (!reverse[mr]) reverse[mr] = en; };
-  add(maps.learned); add(maps.inventory); add(BRAND_MARATHI); add(HINGLISH_TO_MARATHI);
+  add(maps.learned); add(maps.inventory); add(PRODUCT_PHRASES); add(BRAND_MARATHI); add(HINGLISH_TO_MARATHI);
   const words = marathi.split(/\s+/).filter(Boolean);
   const out: string[] = [];
   const phoneticWords: string[] = [];
@@ -388,4 +403,59 @@ export const findDuplicate = <T extends DupCandidate>(
     return iq === q;
   });
   return hit ? { item: hit, reason: 'name' } : null;
+};
+
+// ── Saved item (shop style) ──────────────────────────────────────────────────
+
+const UNIT_CANON: Record<string, string> = { gm: 'g', g: 'g', kg: 'kg', ml: 'ml', ltr: 'l', l: 'l' };
+
+/** "Parle-G Biscuits 250 G" → "parle-g biscuits 250g" (lowercase, size glued, like inventory.json). */
+export const normalizeEngName = (s: string): string =>
+  s.toLowerCase().replace(/\s+/g, ' ').trim()
+    .replace(/(\d+(?:\.\d+)?)\s*(gm|g|kg|ml|ltr|l)(?![a-z])/g, (_, n: string, u: string) => qtyEng(`${n} ${UNIT_CANON[u]}`));
+
+/** "पारले 250 g" → "पारले २५० ग्रॅम" (Devanagari digits and unit words, like inventory.json). */
+export const normalizeMarathiName = (s: string): string =>
+  toDevanagariDigits(
+    s.replace(/\s+/g, ' ').trim()
+      .replace(/(\d+(?:\.\d+)?)\s*(gm|g|kg|ml|ltr|l)(?![a-z])/gi, (_, n: string, u: string) => qtyMarathi(`${n} ${UNIT_CANON[u.toLowerCase()]}`)),
+  );
+
+export interface PhotoItemForm {
+  name_marathi: string; name_eng: string; brand: string; unit: string; net_qty: string;
+  mrp: string; price: string; stock: string; barcode: string; search_key?: string;
+  expiry_date: string; mfg_date: string;
+}
+
+export interface SavedPhotoItem {
+  id: string; name: string; name_marathi: string; name_eng: string; search_key: string;
+  unit: string; price: number; purchase_price: number; stock_quantity: number; stock_qty: number;
+  barcode: string; brand?: string; net_qty?: string; expiry_date?: string; mfg_date?: string;
+}
+
+/**
+ * The object the photo flow saves. MRP → purchase_price (what the card and "X% सूट" badge read).
+ * No undefined values: Firestore rejects them.
+ */
+export const buildPhotoItem = (form: PhotoItemForm, id: string): SavedPhotoItem => {
+  const nameMr = normalizeMarathiName(form.name_marathi);
+  const nameEn = normalizeEngName(form.name_eng);
+  const stock = Number(form.stock) || 0;
+  return {
+    id,
+    name: nameMr || nameEn,
+    name_marathi: nameMr,
+    name_eng: nameEn,
+    search_key: form.search_key?.trim() || makeSearchKey(nameEn, nameMr),
+    unit: form.unit || 'pcs',
+    price: Number(form.price) || 0,
+    purchase_price: Number(form.mrp) || 0,
+    stock_quantity: stock,
+    stock_qty: stock,
+    barcode: form.barcode.trim(),
+    ...(form.brand.trim() ? { brand: form.brand.trim() } : {}),
+    ...(form.net_qty.trim() ? { net_qty: form.net_qty.trim() } : {}),
+    ...(form.expiry_date ? { expiry_date: form.expiry_date } : {}),
+    ...(form.mfg_date ? { mfg_date: form.mfg_date } : {}),
+  };
 };

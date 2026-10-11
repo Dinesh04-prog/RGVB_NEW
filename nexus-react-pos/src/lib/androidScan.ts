@@ -24,6 +24,22 @@ export interface ProductScanResult {
   offStatus: 'found' | 'not_found' | 'error' | 'skipped' | 'rate_limited';
   frontPhotoDataUrl: string | null;
   backPhotoDataUrl: string | null;
+  debug?: ScanDebug;
+}
+
+/** Raw details for "Show raw scan details". Lines are "[h<box height>] text". Never sent anywhere. */
+export interface ScanDebug {
+  error?: string;
+  frontSize?: string;
+  backSize?: string;
+  barcodeMlkit?: { value: string; format: string; checksumOk: boolean; photo: string };
+  ocrFrontLatin?: string;
+  ocrFrontDevanagari?: string;
+  ocrBackLatin?: string;
+  ocrBackDevanagari?: string;
+  parser?: Record<string, { value: string | number | null; confidence: number }>;
+  openFoodFacts?: { name: string | null; brand: string | null; quantity: string | null };
+  timingsMs?: Record<string, number>;
 }
 
 export type ScanField = 'name_eng' | 'name_marathi' | 'brand' | 'net_qty' | 'mrp' | 'barcode' | 'mfg_date' | 'expiry_date';
@@ -87,3 +103,37 @@ export const takePendingScanResult = (): ProductScanResult | null => {
   const json = window.AndroidScan.takePendingResult();
   return json ? parse(json) : null;
 };
+
+const FIELDS: ScanField[] = ['name_eng', 'name_marathi', 'brand', 'net_qty', 'mrp', 'barcode', 'mfg_date', 'expiry_date'];
+const NL = '\n';
+
+/** Plain-text dump of a scan for copy/paste when tuning the parser. Photos are not included. */
+export const formatScanDetails = (r: ProductScanResult): string => {
+  const d = r.debug || {};
+  const block = (title: string, text?: string) => `--- ${title} ---${NL}${text?.trim() ? text : '(none)'}`;
+  const out: string[] = ['NexusPOS scan details'];
+  if (d.error) out.push(`ERROR: ${d.error}`);
+  out.push(`photos: front=${d.frontSize ?? '?'} back=${d.backSize ?? '?'}`);
+  out.push(block('FRONT · OCR Latin', d.ocrFrontLatin));
+  out.push(block('FRONT · OCR Devanagari', d.ocrFrontDevanagari));
+  out.push(block('BACK · OCR Latin', d.ocrBackLatin));
+  out.push(block('BACK · OCR Devanagari', d.ocrBackDevanagari));
+  const bc = d.barcodeMlkit;
+  out.push(block('BARCODE', [
+    bc ? `ML Kit: ${bc.value} (${bc.format}, ${bc.photo} photo, checksum ${bc.checksumOk ? 'ok' : 'FAILED'})` : 'ML Kit: not found',
+    `from OCR digits: ${d.parser?.barcodeFromText?.value ?? 'none'}`,
+    `used: ${r.barcode ?? 'none'} (verified=${r.barcodeVerified})`,
+  ].join(NL)));
+  out.push(block('PARSER (OCR only)', Object.entries(d.parser || {})
+    .map(([k, v]) => `${k}: ${v.value ?? 'null'}  conf=${v.confidence.toFixed(2)}`).join(NL)));
+  out.push(block('FINAL FIELDS (value · source · confidence)', FIELDS.map(k => {
+    const v = (r as unknown as Record<string, unknown>)[k];
+    return `${k}: ${v ?? 'null'} · ${r.source[k] ?? '-'} · ${r.confidence[k]?.toFixed(2) ?? '-'}`;
+  }).join(NL)));
+  const off = d.openFoodFacts;
+  out.push(block('OPEN FOOD FACTS', [`status: ${r.offStatus}`,
+    ...(off ? [`name: ${off.name}`, `brand: ${off.brand}`, `quantity: ${off.quantity}`] : [])].join(NL)));
+  if (d.timingsMs) out.push(`timings ms: ${Object.entries(d.timingsMs).map(([k, v]) => `${k}=${v}`).join(' ')}`);
+  return out.join(NL + NL);
+};
+

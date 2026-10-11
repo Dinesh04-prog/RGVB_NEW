@@ -42,26 +42,49 @@ object ScanPipeline {
         val confidence = JSONObject()
         val source = JSONObject()
 
+        val t0 = System.currentTimeMillis()
+        val debug = JSONObject()   // raw details for "Show raw scan details" — stays on the phone
         val backBmp = loadBitmap(back, OCR_MAX_EDGE)
         val frontBmp = front?.takeIf { it.exists() }?.let { loadBitmap(it, OCR_MAX_EDGE) }
+        debug.put("backSize", backBmp?.let { "${it.width}x${it.height}" } ?: "decode failed")
+        debug.put("frontSize", frontBmp?.let { "${it.width}x${it.height}" } ?: if (front == null) "skipped" else "decode failed")
 
         // 1) Barcode — back photo first, then front
         var barcode: String? = null
         var barcodeVerified = false
-        for (bmp in listOfNotNull(backBmp, frontBmp)) {
+        for ((photo, bmp) in listOf("back" to backBmp, "front" to frontBmp)) {
+            if (bmp == null) continue
             val hit = readBarcode(bmp) ?: continue
             barcode = hit.first
             barcodeVerified = LabelParser.isVerifiedBarcode(hit.first, hit.second)
             confidence.put("barcode", if (barcodeVerified) 0.95 else 0.3)
             source.put("barcode", "mlkit-barcode")
+            debug.put("barcodeMlkit", JSONObject().put("value", hit.first).put("format", hit.second)
+                .put("checksumOk", barcodeVerified).put("photo", photo))
             break
         }
+        val t1 = System.currentTimeMillis()
 
-        // 2) OCR
+        // 2) OCR — Latin on both photos; Devanagari on both (the parser uses the front one when present)
         val backLines = backBmp?.let { ocr(it, devanagari = false) } ?: emptyList()
         val frontLines = frontBmp?.let { ocr(it, devanagari = false) } ?: emptyList()
-        val devLines = (frontBmp ?: backBmp)?.let { ocr(it, devanagari = true) } ?: emptyList()
+        val devFront = frontBmp?.let { ocr(it, devanagari = true) } ?: emptyList()
+        val devBack = backBmp?.let { ocr(it, devanagari = true) } ?: emptyList()
+        val devLines = if (frontBmp != null) devFront else devBack
         val parsed = LabelParser.parse(frontLines, backLines, devLines)
+        val t2 = System.currentTimeMillis()
+
+        fun lines(ls: List<LabelParser.Line>) = ls.joinToString("\n") { "[h${it.height}] ${it.text}" }
+        debug.put("ocrFrontLatin", lines(frontLines))
+        debug.put("ocrFrontDevanagari", lines(devFront))
+        debug.put("ocrBackLatin", lines(backLines))
+        debug.put("ocrBackDevanagari", lines(devBack))
+        fun <T> f(x: LabelParser.Field<T>) = JSONObject().put("value", x.value ?: JSONObject.NULL).put("confidence", x.confidence)
+        debug.put("parser", JSONObject()
+            .put("mrp", f(parsed.mrp)).put("net_qty", f(parsed.netQty))
+            .put("mfg_date", f(parsed.mfgDate)).put("expiry_date", f(parsed.expiryDate))
+            .put("brand", f(parsed.brand)).put("name_eng", f(parsed.name))
+            .put("name_marathi", f(parsed.nameMarathi)).put("barcodeFromText", f(parsed.barcodeFromText)))
 
         if (barcode == null && parsed.barcodeFromText.value != null) {
             barcode = parsed.barcodeFromText.value
@@ -88,6 +111,8 @@ object ScanPipeline {
             val res = OpenFoodFacts.lookup(barcode)
             offStatus = res.status
             res.product?.let { p ->
+                debug.put("openFoodFacts", JSONObject().put("name", p.name ?: JSONObject.NULL)
+                    .put("brand", p.brand ?: JSONObject.NULL).put("quantity", p.quantity ?: JSONObject.NULL))
                 val offName = p.name?.let { stripSize(it) }?.ifBlank { null }
                 if ((name == null || nameConf < WEAK) && offName != null) {
                     name = offName; nameConf = 0.5; source.put("name_eng", "openfoodfacts")
@@ -124,6 +149,10 @@ object ScanPipeline {
         out.put("confidence", confidence)
         out.put("source", source)
 
+        debug.put("timingsMs", JSONObject().put("barcode", t1 - t0).put("ocrAndParse", t2 - t1)
+            .put("total", System.currentTimeMillis() - t0))
+        out.put("debug", debug)
+
         out.put("frontPhotoDataUrl", front?.takeIf { it.exists() }?.let { thumbnail(it) } ?: JSONObject.NULL)
         out.put("backPhotoDataUrl", thumbnail(back) ?: JSONObject.NULL)
 
@@ -138,6 +167,7 @@ object ScanPipeline {
             .forEach { put(it, JSONObject.NULL) }
         put("unit", "pcs")
         put("barcodeVerified", false)
+        put("debug", JSONObject().put("error", "scan processing failed — see logcat tag NexusPOS"))
         put("offStatus", "error")
         put("confidence", JSONObject())
         put("source", JSONObject())
