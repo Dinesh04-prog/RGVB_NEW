@@ -7,7 +7,9 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moves to a new Ubuntu release on 2026-10-19; the Android SDK
+    # steps below rely on this image's preinstalled SDK.
+    runs-on: ubuntu-24.04
 
     steps:
       # ── 1. Checkout ──────────────────────────────────────────────────────────
@@ -93,13 +95,25 @@ jobs:
 
       # ── 5. Build Android APK ─────────────────────────────────────────────────
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      # The runner image ships the Android SDK (ANDROID_HOME=/usr/local/lib/android/sdk).
+      # Use its own sdkmanager by absolute path: no third-party action, no cmdline-tools download,
+      # and no legacy 'tools' package (Google no longer serves it, which broke setup-android@v3).
+      - name: Set up Android SDK (preinstalled on the runner)
+        run: |
+          set -euo pipefail
+          : "${ANDROID_HOME:?ANDROID_HOME is not set on this runner image}"
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$SDKMANAGER" || { echo "sdkmanager not found at $SDKMANAGER"; ls "$ANDROID_HOME/cmdline-tools" || true; exit 1; }
+          "$SDKMANAGER" --version
+          # 'yes' is killed by SIGPIPE when sdkmanager stops reading; don't let pipefail treat that as an error
+          (yes || true) | "$SDKMANAGER" --licenses > /dev/null
+          "$SDKMANAGER" --install "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
 
       - name: Install Gradle 8.6
         run: |
