@@ -1,4 +1,5 @@
-// Bridge to the native "Add item from photos" scanner (ProductScanActivity in nexus-android).
+// Bridge to the native photo scanner (ProductScanActivity in nexus-android), used by the camera button
+// inside the Add / Edit Inventory Item popup. Up to 5 photos per scan; results are merged natively.
 //
 // Native → web:  window.onProductScanResult(jsonString)  /  window.onProductScanCancel()
 // Web → native:  window.AndroidScan.startProductScan()   /  window.AndroidScan.takePendingResult()
@@ -22,23 +23,23 @@ export interface ProductScanResult {
   confidence: Partial<Record<ScanField, number>>;
   source: Partial<Record<ScanField, ScanSource>>;
   offStatus: 'found' | 'not_found' | 'error' | 'skipped' | 'rate_limited';
-  frontPhotoDataUrl: string | null;
-  backPhotoDataUrl: string | null;
+  photoCount?: number;            // 1–5; photos themselves are never sent to the web app
   debug?: ScanDebug;
 }
 
 /** Raw details for "Show raw scan details". Lines are "[h<box height>] text". Never sent anywhere. */
 export interface ScanDebug {
   error?: string;
-  frontSize?: string;
-  backSize?: string;
-  barcodeMlkit?: { value: string; format: string; checksumOk: boolean; photo: string };
-  ocrFrontLatin?: string;
-  ocrFrontDevanagari?: string;
-  ocrBackLatin?: string;
-  ocrBackDevanagari?: string;
-  parser?: Record<string, { value: string | number | null; confidence: number }>;
-  openFoodFacts?: { name: string | null; brand: string | null; quantity: string | null };
+  photos?: {
+    photo: number;                 // 1-based
+    size: string;
+    barcodeMlkit?: { value: string; format: string; checksumOk: boolean } | null;
+    ocrLatin?: string;
+    ocrDevanagari?: string;
+  }[];
+  /** field → photo number it was taken from; 0 = all photos' text combined */
+  pickedFrom?: Partial<Record<ScanField, number>>;
+  openFoodFacts?: { name: string | null; brand: string | null; quantity: string | null } | null;
   timingsMs?: Record<string, number>;
 }
 
@@ -106,29 +107,25 @@ export const takePendingScanResult = (): ProductScanResult | null => {
 
 const FIELDS: ScanField[] = ['name_eng', 'name_marathi', 'brand', 'net_qty', 'mrp', 'barcode', 'mfg_date', 'expiry_date'];
 const NL = '\n';
+const photoLabel = (n: number | undefined) => (n == null ? '-' : n === 0 ? 'all photos' : `photo ${n}`);
 
 /** Plain-text dump of a scan for copy/paste when tuning the parser. Photos are not included. */
 export const formatScanDetails = (r: ProductScanResult): string => {
   const d = r.debug || {};
   const block = (title: string, text?: string) => `--- ${title} ---${NL}${text?.trim() ? text : '(none)'}`;
-  const out: string[] = ['NexusPOS scan details'];
+  const out: string[] = [`NexusPOS scan details · ${r.photoCount ?? d.photos?.length ?? '?'} photo(s)`];
   if (d.error) out.push(`ERROR: ${d.error}`);
-  out.push(`photos: front=${d.frontSize ?? '?'} back=${d.backSize ?? '?'}`);
-  out.push(block('FRONT · OCR Latin', d.ocrFrontLatin));
-  out.push(block('FRONT · OCR Devanagari', d.ocrFrontDevanagari));
-  out.push(block('BACK · OCR Latin', d.ocrBackLatin));
-  out.push(block('BACK · OCR Devanagari', d.ocrBackDevanagari));
-  const bc = d.barcodeMlkit;
-  out.push(block('BARCODE', [
-    bc ? `ML Kit: ${bc.value} (${bc.format}, ${bc.photo} photo, checksum ${bc.checksumOk ? 'ok' : 'FAILED'})` : 'ML Kit: not found',
-    `from OCR digits: ${d.parser?.barcodeFromText?.value ?? 'none'}`,
-    `used: ${r.barcode ?? 'none'} (verified=${r.barcodeVerified})`,
-  ].join(NL)));
-  out.push(block('PARSER (OCR only)', Object.entries(d.parser || {})
-    .map(([k, v]) => `${k}: ${v.value ?? 'null'}  conf=${v.confidence.toFixed(2)}`).join(NL)));
-  out.push(block('FINAL FIELDS (value · source · confidence)', FIELDS.map(k => {
+  for (const p of d.photos || []) {
+    const bc = p.barcodeMlkit;
+    out.push(block(`PHOTO ${p.photo} (${p.size}) · barcode`,
+      bc ? `${bc.value} (${bc.format}, checksum ${bc.checksumOk ? 'ok' : 'FAILED'})` : 'not found'));
+    out.push(block(`PHOTO ${p.photo} · OCR Latin`, p.ocrLatin));
+    out.push(block(`PHOTO ${p.photo} · OCR Devanagari`, p.ocrDevanagari));
+  }
+  out.push(block('BARCODE USED', `${r.barcode ?? 'none'} (verified=${r.barcodeVerified}, ${r.source.barcode ?? '-'}, ${photoLabel(d.pickedFrom?.barcode)})`));
+  out.push(block('MERGED FIELDS (value · source · confidence · from)', FIELDS.map(k => {
     const v = (r as unknown as Record<string, unknown>)[k];
-    return `${k}: ${v ?? 'null'} · ${r.source[k] ?? '-'} · ${r.confidence[k]?.toFixed(2) ?? '-'}`;
+    return `${k}: ${v ?? 'null'} · ${r.source[k] ?? '-'} · ${r.confidence[k]?.toFixed(2) ?? '-'} · ${photoLabel(d.pickedFrom?.[k])}`;
   }).join(NL)));
   const off = d.openFoodFacts;
   out.push(block('OPEN FOOD FACTS', [`status: ${r.offStatus}`,

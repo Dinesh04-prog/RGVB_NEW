@@ -4,7 +4,6 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.media.ExifInterface
-import android.util.Base64
 import android.util.Log
 import com.google.android.gms.tasks.Task
 import com.google.android.gms.tasks.Tasks
@@ -16,103 +15,81 @@ import com.google.mlkit.vision.text.Text
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.devanagari.DevanagariTextRecognizerOptions
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import org.json.JSONArray
 import org.json.JSONObject
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.concurrent.TimeUnit
 
 /**
- * Photo → product details. Runs on a background thread; every step is best-effort, so a failure in
- * one layer (no barcode, OCR error, Open Food Facts down) never stops the review popup from opening.
+ * 1–5 photos of one pack → product details. Runs on a background thread; every step is best-effort, so a
+ * failure in one layer (no barcode, OCR error, Open Food Facts down) never stops the result.
  *
- *   1. ML Kit barcode (bundled)        → barcode + checksum check
- *   2. ML Kit OCR Latin + Devanagari   → LabelParser (MRP, size, dates, brand, name)
- *   3. Open Food Facts (free)          → fills name / brand / size only when OCR left them blank or weak
+ *   per photo: ML Kit barcode (bundled) + OCR Latin + OCR Devanagari
+ *   ScanMerge: picks each field across photos (see ScanMerge.kt)
+ *   Open Food Facts (free): fills name / brand / size only when OCR left them blank or weak
+ *
+ * Photos are not returned to the web app; only text fields and raw debug text.
  */
 object ScanPipeline {
 
     private const val TAG = "NexusPOS"
     private const val OCR_MAX_EDGE = 2048      // OCR reads small inkjet text better on bigger images
-    private const val THUMB_MAX_EDGE = 1280
-    private const val THUMB_JPEG_QUALITY = 80
     private const val WEAK = 0.6
 
-    fun run(front: File?, back: File): JSONObject {
-        val out = JSONObject()
-        val confidence = JSONObject()
-        val source = JSONObject()
-
+    fun run(photos: List<File>): JSONObject {
         val t0 = System.currentTimeMillis()
-        val debug = JSONObject()   // raw details for "Show raw scan details" — stays on the phone
-        val backBmp = loadBitmap(back, OCR_MAX_EDGE)
-        val frontBmp = front?.takeIf { it.exists() }?.let { loadBitmap(it, OCR_MAX_EDGE) }
-        debug.put("backSize", backBmp?.let { "${it.width}x${it.height}" } ?: "decode failed")
-        debug.put("frontSize", frontBmp?.let { "${it.width}x${it.height}" } ?: if (front == null) "skipped" else "decode failed")
+        val debugPhotos = JSONArray()
+        val scans = mutableListOf<ScanMerge.Photo>()
 
-        // 1) Barcode — back photo first, then front
-        var barcode: String? = null
-        var barcodeVerified = false
-        for ((photo, bmp) in listOf("back" to backBmp, "front" to frontBmp)) {
-            if (bmp == null) continue
-            val hit = readBarcode(bmp) ?: continue
-            barcode = hit.first
-            barcodeVerified = LabelParser.isVerifiedBarcode(hit.first, hit.second)
-            confidence.put("barcode", if (barcodeVerified) 0.95 else 0.3)
-            source.put("barcode", "mlkit-barcode")
-            debug.put("barcodeMlkit", JSONObject().put("value", hit.first).put("format", hit.second)
-                .put("checksumOk", barcodeVerified).put("photo", photo))
-            break
+        // One photo at a time, so only one big bitmap is in memory on cheap phones
+        photos.forEachIndexed { i, file ->
+            val bmp = loadBitmap(file, OCR_MAX_EDGE)
+            val d = JSONObject().put("photo", i + 1).put("size", bmp?.let { "${it.width}x${it.height}" } ?: "decode failed")
+            if (bmp == null) { debugPhotos.put(d); return@forEachIndexed }
+            try {
+                val bc = readBarcode(bmp)
+                val latin = ocr(bmp, devanagari = false)
+                val dev = ocr(bmp, devanagari = true)
+                scans += ScanMerge.Photo(latin, dev, bc)
+                d.put("barcodeMlkit", bc?.let {
+                    JSONObject().put("value", it.first).put("format", it.second)
+                        .put("checksumOk", LabelParser.isVerifiedBarcode(it.first, it.second))
+                } ?: JSONObject.NULL)
+                d.put("ocrLatin", lines(latin))
+                d.put("ocrDevanagari", lines(dev))
+            } finally {
+                bmp.recycle()
+            }
+            debugPhotos.put(d)
         }
         val t1 = System.currentTimeMillis()
 
-        // 2) OCR — Latin on both photos; Devanagari on both (the parser uses the front one when present)
-        val backLines = backBmp?.let { ocr(it, devanagari = false) } ?: emptyList()
-        val frontLines = frontBmp?.let { ocr(it, devanagari = false) } ?: emptyList()
-        val devFront = frontBmp?.let { ocr(it, devanagari = true) } ?: emptyList()
-        val devBack = backBmp?.let { ocr(it, devanagari = true) } ?: emptyList()
-        val devLines = if (frontBmp != null) devFront else devBack
-        val parsed = LabelParser.parse(frontLines, backLines, devLines)
-        val t2 = System.currentTimeMillis()
-
-        fun lines(ls: List<LabelParser.Line>) = ls.joinToString("\n") { "[h${it.height}] ${it.text}" }
-        debug.put("ocrFrontLatin", lines(frontLines))
-        debug.put("ocrFrontDevanagari", lines(devFront))
-        debug.put("ocrBackLatin", lines(backLines))
-        debug.put("ocrBackDevanagari", lines(devBack))
-        fun <T> f(x: LabelParser.Field<T>) = JSONObject().put("value", x.value ?: JSONObject.NULL).put("confidence", x.confidence)
-        debug.put("parser", JSONObject()
-            .put("mrp", f(parsed.mrp)).put("net_qty", f(parsed.netQty))
-            .put("mfg_date", f(parsed.mfgDate)).put("expiry_date", f(parsed.expiryDate))
-            .put("brand", f(parsed.brand)).put("name_eng", f(parsed.name))
-            .put("name_marathi", f(parsed.nameMarathi)).put("barcodeFromText", f(parsed.barcodeFromText)))
-
-        if (barcode == null && parsed.barcodeFromText.value != null) {
-            barcode = parsed.barcodeFromText.value
-            barcodeVerified = true   // only checksum-valid digit runs are returned
-            confidence.put("barcode", parsed.barcodeFromText.confidence)
-            source.put("barcode", "mlkit-ocr")
-        }
-
-        var name = parsed.name.value
-        var nameConf = parsed.name.confidence
-        var brand = parsed.brand.value
-        var brandConf = parsed.brand.confidence
-        var qty = parsed.netQty.value
-        var qtyConf = parsed.netQty.confidence
+        val m = ScanMerge.merge(scans)
+        val confidence = JSONObject()
+        val source = JSONObject()
         val ocrSrc = "mlkit-ocr"
+
+        var name = m.name.value
+        var nameConf = m.name.confidence
+        var brand = m.brand.value
+        var brandConf = m.brand.confidence
+        var qty = m.netQty.value
+        var qtyConf = m.netQty.confidence
         if (name != null) source.put("name_eng", ocrSrc)
         if (brand != null) source.put("brand", ocrSrc)
         if (qty != null) source.put("net_qty", ocrSrc)
 
-        // 3) Open Food Facts — only for a valid barcode and only to fill weak/blank fields
+        // Open Food Facts — only for a valid barcode and only to fill weak/blank fields
         var offStatus = "skipped"
+        var offDebug: JSONObject? = null
         val needsHelp = name == null || nameConf < WEAK || brand == null || brandConf < WEAK || qty == null
-        if (barcode != null && barcodeVerified && needsHelp) {
+        val barcode = m.barcode
+        if (barcode != null && m.barcodeVerified && needsHelp) {
             val res = OpenFoodFacts.lookup(barcode)
             offStatus = res.status
             res.product?.let { p ->
-                debug.put("openFoodFacts", JSONObject().put("name", p.name ?: JSONObject.NULL)
-                    .put("brand", p.brand ?: JSONObject.NULL).put("quantity", p.quantity ?: JSONObject.NULL))
+                offDebug = JSONObject().put("name", p.name ?: JSONObject.NULL)
+                    .put("brand", p.brand ?: JSONObject.NULL).put("quantity", p.quantity ?: JSONObject.NULL)
                 val offName = p.name?.let { stripSize(it) }?.ifBlank { null }
                 if ((name == null || nameConf < WEAK) && offName != null) {
                     name = offName; nameConf = 0.5; source.put("name_eng", "openfoodfacts")
@@ -127,53 +104,55 @@ object ScanPipeline {
             }
         }
 
+        val out = JSONObject()
         out.put("name_eng", name ?: JSONObject.NULL)
-        out.put("name_marathi", parsed.nameMarathi.value ?: JSONObject.NULL)
+        out.put("name_marathi", m.nameMarathi.value ?: JSONObject.NULL)
         out.put("brand", brand ?: JSONObject.NULL)
         out.put("unit", "pcs")
         out.put("net_qty", qty ?: JSONObject.NULL)
-        out.put("mrp", parsed.mrp.value ?: JSONObject.NULL)
+        out.put("mrp", m.mrp.value ?: JSONObject.NULL)
         out.put("barcode", barcode ?: JSONObject.NULL)
-        out.put("barcodeVerified", barcodeVerified)
-        out.put("mfg_date", parsed.mfgDate.value ?: JSONObject.NULL)
-        out.put("expiry_date", parsed.expiryDate.value ?: JSONObject.NULL)
+        out.put("barcodeVerified", m.barcodeVerified)
+        out.put("mfg_date", m.mfgDate.value ?: JSONObject.NULL)
+        out.put("expiry_date", m.expiryDate.value ?: JSONObject.NULL)
         out.put("offStatus", offStatus)
+        out.put("photoCount", photos.size)
 
         if (name != null) confidence.put("name_eng", nameConf)
         if (brand != null) confidence.put("brand", brandConf)
         if (qty != null) confidence.put("net_qty", qtyConf)
-        if (parsed.nameMarathi.value != null) { confidence.put("name_marathi", parsed.nameMarathi.confidence); source.put("name_marathi", ocrSrc) }
-        if (parsed.mrp.value != null) { confidence.put("mrp", parsed.mrp.confidence); source.put("mrp", ocrSrc) }
-        if (parsed.mfgDate.value != null) { confidence.put("mfg_date", parsed.mfgDate.confidence); source.put("mfg_date", ocrSrc) }
-        if (parsed.expiryDate.value != null) { confidence.put("expiry_date", parsed.expiryDate.confidence); source.put("expiry_date", ocrSrc) }
+        if (barcode != null) { confidence.put("barcode", m.barcodeConfidence); source.put("barcode", m.barcodeSource) }
+        if (m.nameMarathi.value != null) { confidence.put("name_marathi", m.nameMarathi.confidence); source.put("name_marathi", ocrSrc) }
+        if (m.mrp.value != null) { confidence.put("mrp", m.mrp.confidence); source.put("mrp", ocrSrc) }
+        if (m.mfgDate.value != null) { confidence.put("mfg_date", m.mfgDate.confidence); source.put("mfg_date", ocrSrc) }
+        if (m.expiryDate.value != null) { confidence.put("expiry_date", m.expiryDate.confidence); source.put("expiry_date", ocrSrc) }
         out.put("confidence", confidence)
         out.put("source", source)
 
-        debug.put("timingsMs", JSONObject().put("barcode", t1 - t0).put("ocrAndParse", t2 - t1)
-            .put("total", System.currentTimeMillis() - t0))
-        out.put("debug", debug)
-
-        out.put("frontPhotoDataUrl", front?.takeIf { it.exists() }?.let { thumbnail(it) } ?: JSONObject.NULL)
-        out.put("backPhotoDataUrl", thumbnail(back) ?: JSONObject.NULL)
-
-        backBmp?.recycle()
-        frontBmp?.recycle()
+        // Raw details for "Show raw scan details" — text only, stays on the phone
+        val picked = JSONObject().also { j -> m.pickedFrom.forEach { (k, v) -> j.put(k, v) } }
+        out.put("debug", JSONObject()
+            .put("photos", debugPhotos)
+            .put("pickedFrom", picked)
+            .put("openFoodFacts", offDebug ?: JSONObject.NULL)
+            .put("timingsMs", JSONObject().put("photos", t1 - t0).put("total", System.currentTimeMillis() - t0)))
         return out
     }
 
-    /** Result shape when processing itself crashed: the review popup still opens for manual entry. */
-    fun emptyResult(front: File?, back: File): JSONObject = JSONObject().apply {
+    /** Result when processing itself crashed: the popup stays as it is, with a short message. */
+    fun emptyResult(photoCount: Int, error: String): JSONObject = JSONObject().apply {
         listOf("name_eng", "name_marathi", "brand", "net_qty", "mrp", "barcode", "mfg_date", "expiry_date")
             .forEach { put(it, JSONObject.NULL) }
         put("unit", "pcs")
         put("barcodeVerified", false)
-        put("debug", JSONObject().put("error", "scan processing failed — see logcat tag NexusPOS"))
         put("offStatus", "error")
+        put("photoCount", photoCount)
         put("confidence", JSONObject())
         put("source", JSONObject())
-        put("frontPhotoDataUrl", front?.takeIf { it.exists() }?.let { thumbnail(it) } ?: JSONObject.NULL)
-        put("backPhotoDataUrl", thumbnail(back) ?: JSONObject.NULL)
+        put("debug", JSONObject().put("error", "scan processing failed: $error (logcat tag NexusPOS)"))
     }
+
+    private fun lines(ls: List<LabelParser.Line>) = ls.joinToString("\n") { "[h${it.height}] ${it.text}" }
 
     private fun stripSize(s: String) =
         s.replace(Regex("""\d+(?:[.,]\d+)?\s*(?:g|gm|gms|kg|ml|l|ltr)\b""", RegexOption.IGNORE_CASE), " ")
@@ -249,18 +228,5 @@ object ScanPipeline {
     } catch (e: OutOfMemoryError) {
         Log.w(TAG, "Out of memory decoding ${file.name}")
         null
-    }
-
-    private fun thumbnail(file: File): String? {
-        val bmp = loadBitmap(file, THUMB_MAX_EDGE) ?: return null
-        return try {
-            val bytes = ByteArrayOutputStream().use { os ->
-                bmp.compress(Bitmap.CompressFormat.JPEG, THUMB_JPEG_QUALITY, os)
-                os.toByteArray()
-            }
-            "data:image/jpeg;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP)
-        } finally {
-            bmp.recycle()
-        }
     }
 }

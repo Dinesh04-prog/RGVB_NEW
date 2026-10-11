@@ -399,7 +399,10 @@ object LabelParser {
         """NET\b|\bWT\b|MRP|M\.R\.P|\bRS\b|₹|%|FREE|\bNEW\b|OFFER|PACK\s*OF|\bVEG\b|KCAL|ENERGY|PROTEIN|INGREDIENT|""" +
         """NUTRI|FSSAI|\bLIC\b|MFD|MFG|\bEXP|WWW|\.COM|@|\bSAVE\b|EXTRA|\bONLY\b|IMPROVED|BEST\b|TRUSTED|""" +
         """SINCE\s*\d|\bNO\.?\s*1\b|\bWITH\b|CONTAINS|MADE\s*WITH|GOODNESS|HEALTHY|TASTY|DELICIOUS|ZERO|""" +
-        """GERM|PROTECTION|\bFOR\b|\bAND\b.*\bAND\b"""
+        """GERM|PROTECTION|\bFOR\b|\bAND\b.*\bAND\b|""" +
+        // back/side-of-pack text: company lines, storage and usage instructions
+        """\bPVT\b|\bLTD\b|LIMITED|MARKETED|MANUFACTURED|\bPACKED\b|CUSTOMER|\bCARE\b|\bPLOT\b|\bROAD\b|""" +
+        """\bDIST\b|\bSTORE\b|\bKEEP\b|\bDRY\b|\bPLACE\b|DIRECTION|WARNING|CAUTION|ALLERG|\bUSE\b|BATCH"""
     )
     private val PRODUCT_WORDS = Regex(
         """BISCUITS?|COOKIES?|OIL|SOAP|SHAMPOO|CONDITIONER|TEA|COFFEE|SALT|POWDER|MASALA|ATTA|FLOUR|DAL|RICE|""" +

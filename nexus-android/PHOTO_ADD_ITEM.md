@@ -1,29 +1,57 @@
-# Add Item from Photos (Android app)
+# Fill an inventory item from photos (Android app)
 
-Photograph the **front** (name/brand, optional) and **back** (barcode, MRP, size, dates) of a pack.
-The app reads it on the phone, opens a pre-filled review popup, and saves into the normal inventory.
+A **📷 फोटोवरून भरा** button sits at the top of the normal **Add / Edit Inventory Item** popup
+(only inside the Android app). Take 1–5 photos of the pack (front, back, side, crimp); the app reads them on the
+phone and fills the popup's empty fields. Everything stays editable, and **SAVE CHANGES** works exactly as before.
 Running cost: **zero**, with no API keys and no billing account.
 
 ## How it works
 
 ```
-Inventory tab → "📷 Photo se item add karo"   (only shown inside the Android app)
-  → window.AndroidScan.startProductScan()                 AndroidScanBridge.kt
-  → ProductScanActivity (CameraX: front → back, retake, tap-to-focus, torch, guide frame)
-  → ScanPipeline (background thread)
-       1. ML Kit barcode (bundled)       EAN-13/EAN-8/UPC-A/UPC-E checksum → barcodeVerified
-       2. ML Kit OCR Latin + Devanagari  → LabelParser.kt (MRP, net qty, MFG/EXP, brand, name)
-       3. Open Food Facts (free, no key) → fills name/brand/size only if OCR left them blank or weak
+Add / Edit popup → "📷 फोटोवरून भरा"                       PhotoScanFill.tsx + usePhotoScanFill.ts
+  → window.AndroidScan.startProductScan()                    AndroidScanBridge.kt
+  → ProductScanActivity (CameraX): photo counter 1–5, "पुन्हा घ्या" (retake last), "+ आणखी फोटो",
+    "✓ झाले" (Done), tap-to-focus, torch, guide frame
+  → ScanPipeline (background thread), per photo: ML Kit barcode + OCR Latin + OCR Devanagari
+  → ScanMerge.kt picks each field across photos (below)
+  → Open Food Facts (free, no key): fills name / brand / size only if OCR left them blank or weak
   → result JSON in filesDir/scan_result.json → MainActivity → window.onProductScanResult(json)
-  → PhotoAddItem.tsx review popup → upsertInventoryItem() (same write path as the manual form)
+  → photoFill.ts fills only empty fields of the open popup → the user edits → SAVE CHANGES
+  → saveInventoryEdit() → upsertInventoryItem() (the only write path)
 ```
 
-* Every layer is best-effort. No barcode, no internet, an Open Food Facts timeout (5 s) or even a pipeline
-  crash still opens the review popup with whatever was read. If nothing was read, it says so and the user fills it in by hand.
-* Low-memory phones: photos are stored in `cacheDir`, the step is kept across Activity recreation, and the
-  result is kept on disk until the web app picks it up (`AndroidScan.takePendingResult()`).
-* Yellow fields mean one of: auto-filled names, confidence below 0.6, an unverified barcode, or Open Food Facts suggestions.
-  A field the user has typed is never overwritten.
+**Bridge result** (`ProductScanResult` in `src/lib/androidScan.ts`): `name_eng, name_marathi, brand, unit, net_qty,
+mrp, barcode, barcodeVerified, mfg_date, expiry_date, confidence{}, source{}, offStatus, photoCount, debug`.
+Photos and thumbnails are **not** sent to the web app.
+
+### Merging photos (ScanMerge.kt)
+* **Barcode:** the first photo whose ML Kit barcode passes the EAN/UPC checksum. Otherwise checksum-valid digits
+  read by OCR (highest confidence). Otherwise the first ML Kit barcode, marked unverified.
+* **MRP, net qty, MFG, EXP:** parsed on every photo **and** on all photos' text joined, so that "best before 9
+  months" on one photo combines with the PKD date on another. The highest confidence wins, with the earliest photo
+  on ties. If another photo has a different value with similar confidence, the value is kept but marked weak.
+* **Brand and English name:** each photo is parsed as if it were the front. A known brand or product word scores
+  first, then the photo with the largest text (normally the front). Company lines, storage and usage text are ignored.
+* **Marathi name:** the photo with the tallest Devanagari name line.
+* An expiry that is not after the MFG date is kept but marked weak.
+
+### Filling the popup (photoFill.ts)
+* Only **empty** fields are filled, and never a field the user has typed in this popup. In **Edit** mode, saved
+  values are never overwritten. A price or MRP of 0 counts as empty.
+* The visible name box gets the Marathi name (`name` = `name_marathi`). The hidden `name_eng` is added only
+  together with it, in the shop style (`"parle-g original gluco biscuits 250g"` / `"पारले-जी … २५० ग्रॅम"`).
+* Also filled: barcode, MRP → `purchase_price`, sale rate = MRP when empty, unit (`pcs`; a new item's default
+  `kg` counts as empty), and the hidden `brand`, `net_qty`, `expiry_date`, `mfg_date`.
+  For an existing item with no short code, `search_key` is filled too. **Stock is never filled.**
+* Auto-filled fields get a light yellow background, which disappears when the user edits that field.
+* **Duplicates** (only after a scan): the same barcode on another item shows a red **"Item already exists"** notice
+  with **Open existing item**, and Save is blocked for a new item. The same name and size without a barcode match
+  shows a yellow warning, and Save is still allowed.
+* Scan failed, nothing read, or no internet / Open Food Facts down: a short message appears and the popup keeps
+  whatever was decoded.
+* After a save, word pairs the user corrected in a suggested name are remembered locally (`photo_name_map`).
+* Low-memory phones: photos live in `cacheDir` and the count and step survive Activity recreation. The result waits
+  on disk; if the app restarted, a new-item popup opens and is filled.
 * Open Food Facts: one call per scan, no retries, capped at 14 calls/min in the app (their limit is 15/min/IP).
   User-Agent is `OpenFoodFacts.USER_AGENT`.
 
@@ -45,8 +73,11 @@ transliteration (flagged). Word pairs the user corrects are remembered in Indexe
 ## Tests
 
 * `nexus-android`: `gradle testDebugUnitTest` runs `LabelParserTest` (checksums, unit normalizer, OCR digit fixes,
-  and an accuracy table over 35 noisy label samples with a minimum per field). It runs in CI before `assembleRelease`.
-* `nexus-react-pos`: `npm run test:names` checks bilingual names, short code, size format, learning and duplicates.
+  spaced inkjet dates, and an accuracy table over 35 noisy label samples with a minimum per field) and `ScanMergeTest`
+  (MRP only on photo 3, barcode only on photo 2, bad checksum on one photo, best-before and PKD on different photos,
+  conflicting names and MRPs). It runs in CI before `assembleRelease`.
+* `nexus-react-pos`: `npm run test:names` checks bilingual names, short code, size format, learning, duplicates,
+  the popup fill rules (new vs edit, typed fields protected, stock never filled) and the "Copy details" text.
 
 ## APK size
 
@@ -56,19 +87,17 @@ Emulators need an ARM system image because of the ABI filter.
 
 ## Raw scan details (for tuning)
 
-The review popup has a small **"Show raw scan details"** link at the bottom (collapsed by default). It shows:
-- raw OCR text per photo (Latin and Devanagari, with box heights);
-- the parser's own values and confidence;
-- the final value, source and confidence for each field;
-- the ML Kit barcode result and the OCR-digit fallback;
-- the Open Food Facts response and timings.
+After a scan, the Add / Edit popup has a small **"Show raw scan details"** link at the bottom (collapsed by default). It shows:
+- for each photo: the ML Kit barcode result, and the raw OCR text (Latin and Devanagari, with box heights);
+- for each merged field: value, source, confidence and which photo it came from;
+- the barcode that was used, the Open Food Facts response, and timings.
 
 **"📋 Copy details"** copies it as plain text, without photos. Nothing is sent anywhere.
 
 ## Testing safely: test items go to the live shop data
 
 The APK is built in CI with the **production** Firebase config (`VITE_FIREBASE_PROJECT_ID: nexus-pos-817c3` in
-`.github/workflows/build-apk.yml`). A Save from the photo flow calls `upsertInventoryItem`, which does this:
+`.github/workflows/build-apk.yml`). A Save from the popup (camera-filled or not) calls `upsertInventoryItem`, which does this:
 
 1. Updates the phone's in-memory list and IndexedDB cache (`custom_inventory`).
 2. Calls `saveInventoryItemToCloud` → `setDoc(inventory/<id>)` in the production Firestore project.
@@ -82,7 +111,7 @@ The Excel auto-sync only runs on a desktop browser that has an Excel file linked
 2. To delete in the app: Inventory tab → search "test" → tap the item → **DELETE** (top right of the edit popup) → confirm.
    This removes it locally and from Firestore (`removeInventoryItemFromCloud`), and other devices update within seconds.
 3. To delete in the Firebase console: project `nexus-pos-817c3` → Firestore → collection `inventory`.
-   Photo-added documents have ids `INV-<timestamp>` and a `net_qty` field; delete the test documents there.
+   New items have ids `INV-<timestamp>`, and camera-filled ones usually have a `net_qty` field; delete the test documents there.
 4. Learned name corrections stay only on that phone (IndexedDB key `photo_name_map`).
    Clear the app's storage to reset them; they are never uploaded.
 

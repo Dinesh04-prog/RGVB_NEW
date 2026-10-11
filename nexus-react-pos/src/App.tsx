@@ -14,8 +14,8 @@ import { saveSale, getSalesHistory } from "./lib/db";
 import type { CartItem, Receipt } from "./lib/db";
 import { translateHinglishToMarathi, transliterateDevanagariToLatin, normalizeForSearch, HINGLISH_TO_MARATHI, parseUserQuery, scoreCandidate } from "./lib/phonetic";
 import { makeSearchKey } from "./lib/itemNames";
-import { isAndroidScanAvailable, startProductScan } from "./lib/androidScan";
-import PhotoAddItem from "./components/PhotoAddItem";
+import { usePhotoScanFill } from "./lib/usePhotoScanFill";
+import { PhotoScanButton, PhotoScanNotices, PhotoScanDebug } from "./components/PhotoScanFill";
 
 interface InventoryItem {
   id: string;
@@ -409,6 +409,11 @@ export default function App() {
   const reviewUnsubRef = useRef<(() => void) | null>(null);
   const invOverridesUnsubRef = useRef<(() => void) | null>(null);
   const [inventoryEditItem, setInventoryEditItem] = useState<InventoryItem | null>(null);
+  // Camera fill inside the Add / Edit popup (Android app only): fills empty fields, same save path
+  const photoScan = usePhotoScanFill({
+    item: inventoryEditItem, setItem: setInventoryEditItem, inventory,
+    newItem: () => ({ id: `INV-${Date.now()}`, name: '', unit: 'kg', price: 0, purchase_price: 0, stock_quantity: 0, barcode: '' }),
+  });
   const [isScanning, setIsScanning] = useState(false);
   const [torchOn, setTorchOn] = useState(false);
   const [torchSupported, setTorchSupported] = useState(false);
@@ -547,7 +552,9 @@ export default function App() {
       const en = item.name_eng || (/[ऀ-ॿ]/.test(mr) ? transliterateDevanagariToLatin(mr) : mr);
       if (mr.trim()) item = { ...item, search_key: makeSearchKey(en, mr) };
     }
+    if (photoScan.blockSave) return;
     await upsertInventoryItem(item);
+    photoScan.onSaved(item);
     setInventoryEditItem(null);
   };
 
@@ -2559,14 +2566,6 @@ export default function App() {
                 >
                   ➕ ADD NEW ITEM
                 </button>
-                {isAndroidScanAvailable() && (
-                  <button
-                    onClick={() => startProductScan()}
-                    style={{ background: '#F97316', color: 'white', border: 'none', padding: '10px 16px', minHeight: '48px', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer', whiteSpace: 'nowrap', fontSize: '0.95rem', flex: '1 1 100%' }}
-                  >
-                    📷 Photo se item add karo
-                  </button>
-                )}
               </div>
               {uploadStatus && (
                 <div style={{
@@ -3068,8 +3067,6 @@ export default function App() {
         </div>
       )}
 
-      <PhotoAddItem inventory={inventory} onSave={upsertInventoryItem} onOpenExisting={setInventoryEditItem} />
-
       {inventoryEditItem && (
         <div className="modal-overlay">
           <div className="modal-content" style={{ padding: '15px' }}>
@@ -3088,14 +3085,16 @@ export default function App() {
               </div>
             </div>
             
+            <PhotoScanButton scan={photoScan} />
+            <PhotoScanNotices scan={photoScan} onOpenExisting={setInventoryEditItem} />
             <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#6c757d', marginBottom: '4px', display: 'block' }}>NAME (MARATHI / ENG)</label>
             <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
               <input
                 type="text"
                 className="edit-input"
-                style={{ flex: 1 }}
+                style={{ flex: 1, ...photoScan.hl('name') }}
                 value={inventoryEditItem.name_marathi || inventoryEditItem.name}
-                onChange={(e) => setInventoryEditItem({ ...inventoryEditItem, name_marathi: e.target.value, name: e.target.value })}
+                onChange={(e) => { photoScan.edited('name'); setInventoryEditItem({ ...inventoryEditItem, name_marathi: e.target.value, name: e.target.value }); }}
                 onKeyDown={editModalKeyDown}
               />
               <button
@@ -3128,10 +3127,10 @@ export default function App() {
               <input
                 type="text"
                 className="edit-input"
-                style={{ flex: 1 }}
+                style={{ flex: 1, ...photoScan.hl('barcode') }}
                 placeholder="Scan or type barcode"
                 value={inventoryEditItem.barcode || ''}
-                onChange={(e) => setInventoryEditItem({ ...inventoryEditItem, barcode: e.target.value })}
+                onChange={(e) => { photoScan.edited('barcode'); setInventoryEditItem({ ...inventoryEditItem, barcode: e.target.value }); }}
                 onKeyDown={editModalKeyDown}
               />
               <button
@@ -3187,8 +3186,9 @@ export default function App() {
                   type="number"
                   inputMode="decimal"
                   className="edit-input"
+                  style={photoScan.hl('purchase_price')}
                   value={isNaN(inventoryEditItem.purchase_price as number) ? "" : inventoryEditItem.purchase_price}
-                  onChange={(e) => setInventoryEditItem({ ...inventoryEditItem, purchase_price: Number(e.target.value) })}
+                  onChange={(e) => { photoScan.edited('purchase_price'); setInventoryEditItem({ ...inventoryEditItem, purchase_price: Number(e.target.value) }); }}
                   onKeyDown={editModalKeyDown}
                 />
               </div>
@@ -3198,8 +3198,9 @@ export default function App() {
                   type="number"
                   inputMode="decimal"
                   className="edit-input"
+                  style={photoScan.hl('price')}
                   value={isNaN(inventoryEditItem.price as number) ? "" : inventoryEditItem.price}
-                  onChange={(e) => setInventoryEditItem({ ...inventoryEditItem, price: Number(e.target.value) })}
+                  onChange={(e) => { photoScan.edited('price'); setInventoryEditItem({ ...inventoryEditItem, price: Number(e.target.value) }); }}
                   onKeyDown={editModalKeyDown}
                 />
               </div>
@@ -3222,8 +3223,9 @@ export default function App() {
                 <input
                   type="text"
                   className="edit-input"
+                  style={photoScan.hl('unit')}
                   value={inventoryEditItem.unit || ''}
-                  onChange={(e) => setInventoryEditItem({ ...inventoryEditItem, unit: e.target.value })}
+                  onChange={(e) => { photoScan.edited('unit'); setInventoryEditItem({ ...inventoryEditItem, unit: e.target.value }); }}
                   onKeyDown={editModalKeyDown}
                 />
               </div>
@@ -3307,9 +3309,10 @@ export default function App() {
               </div>
             </div>
 
-            <button className="modal-btn" onClick={saveInventoryEdit} style={{ marginTop: '20px' }}>
+            <button className="modal-btn" onClick={saveInventoryEdit} disabled={photoScan.blockSave} style={{ marginTop: '20px', ...(photoScan.blockSave ? { opacity: 0.5 } : {}) }}>
               SAVE CHANGES
             </button>
+            <PhotoScanDebug scan={photoScan} />
           </div>
         </div>
       )}

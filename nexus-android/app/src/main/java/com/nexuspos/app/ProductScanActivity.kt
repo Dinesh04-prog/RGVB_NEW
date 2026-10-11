@@ -43,30 +43,31 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /**
- * Step 1: front photo (name/brand, optional) → Step 2: back photo (barcode, MRP, size, dates, required)
- * → ScanPipeline on a background thread → result JSON written to [resultFile] → RESULT_OK.
+ * Take 1–5 photos of one pack (front, back, side, crimp…), then "Done" → ScanPipeline on a background
+ * thread → result JSON written to [resultFile] → RESULT_OK. Photos never leave this screen.
  *
- * Survives being destroyed (low memory / process death): photos live in cacheDir, the step is saved in
- * onSaveInstanceState, and the result goes to a file that MainActivity / the web app pick up later.
+ * Survives being destroyed (low memory / process death): photos live in cacheDir, the photo count and step
+ * are saved in onSaveInstanceState, and the result goes to a file that MainActivity / the web app pick up.
  */
 class ProductScanActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "NexusPOS"
         private const val REQ_CAMERA = 2001
+        const val MAX_PHOTOS = 5
         private const val STATE_STEP = "step"
-        private const val STATE_FRONT_SKIPPED = "frontSkipped"
+        private const val STATE_COUNT = "count"
         private const val STATE_TORCH = "torch"
 
         fun resultFile(ctx: Context) = File(ctx.filesDir, "scan_result.json")
-        private fun frontFile(ctx: Context) = File(ctx.cacheDir, "scan_front.jpg")
-        private fun backFile(ctx: Context) = File(ctx.cacheDir, "scan_back.jpg")
+        private fun photoFile(ctx: Context, n: Int) = File(ctx.cacheDir, "scan_photo_$n.jpg")
+        private fun clearPhotos(ctx: Context) = (1..MAX_PHOTOS).forEach { photoFile(ctx, it).delete() }
     }
 
-    private enum class Step { FRONT, FRONT_PREVIEW, BACK, BACK_PREVIEW, PROCESSING }
+    private enum class Step { CAMERA, PREVIEW, PROCESSING }
 
-    private var step = Step.FRONT
-    private var frontSkipped = false
+    private var step = Step.CAMERA
+    private var count = 0          // photos taken and kept
     private var torchOn = false
     private var camera: Camera? = null
     private var imageCapture: ImageCapture? = null
@@ -82,28 +83,27 @@ class ProductScanActivity : AppCompatActivity() {
     private lateinit var previewBar: LinearLayout
     private lateinit var captureBtn: Button
     private lateinit var torchBtn: Button
-    private lateinit var skipBtn: Button
+    private lateinit var doneBtnCamera: Button
+    private lateinit var addAnotherBtn: Button
     private lateinit var progress: LinearLayout
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         buildUi()
-        savedInstanceState?.let {
-            step = Step.valueOf(it.getString(STATE_STEP, Step.FRONT.name))
-            frontSkipped = it.getBoolean(STATE_FRONT_SKIPPED)
-            torchOn = it.getBoolean(STATE_TORCH)
-        }
         if (savedInstanceState == null) {
-            frontFile(this).delete()
-            backFile(this).delete()
+            clearPhotos(this)
+        } else {
+            step = Step.valueOf(savedInstanceState.getString(STATE_STEP) ?: Step.CAMERA.name)
+            count = savedInstanceState.getInt(STATE_COUNT)
+            torchOn = savedInstanceState.getBoolean(STATE_TORCH)
         }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() = handleBack()
         })
 
-        // A preview whose photo was cleaned up meanwhile falls back to the camera step
-        if (step == Step.FRONT_PREVIEW && !frontFile(this).exists()) step = Step.FRONT
-        if ((step == Step.BACK_PREVIEW || step == Step.PROCESSING) && !backFile(this).exists()) step = Step.BACK
+        // Photos cleaned up meanwhile (cache cleared): keep only the ones that still exist
+        while (count > 0 && !photoFile(this, count).exists()) count--
+        if (count == 0 && step != Step.CAMERA) step = Step.CAMERA
 
         if (step == Step.PROCESSING) { startProcessing(); return }
         render()
@@ -117,7 +117,7 @@ class ProductScanActivity : AppCompatActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putString(STATE_STEP, step.name)
-        outState.putBoolean(STATE_FRONT_SKIPPED, frontSkipped)
+        outState.putInt(STATE_COUNT, count)
         outState.putBoolean(STATE_TORCH, torchOn)
     }
 
@@ -126,7 +126,7 @@ class ProductScanActivity : AppCompatActivity() {
         if (requestCode != REQ_CAMERA) return
         if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) startCamera()
         else {
-            Toast.makeText(this, "Camera permission is needed to add items from photos", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Camera permission is needed to fill items from photos", Toast.LENGTH_LONG).show()
             finishCancelled()
         }
     }
@@ -170,13 +170,15 @@ class ProductScanActivity : AppCompatActivity() {
 
     private fun capture() {
         val ic = imageCapture ?: return
-        val file = if (step == Step.FRONT) frontFile(this) else backFile(this)
+        if (count >= MAX_PHOTOS) return
+        val file = photoFile(this, count + 1)
         captureBtn.isEnabled = false
         ic.takePicture(ImageCapture.OutputFileOptions.Builder(file).build(), ContextCompat.getMainExecutor(this),
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
                     captureBtn.isEnabled = true
-                    step = if (step == Step.FRONT) Step.FRONT_PREVIEW else Step.BACK_PREVIEW
+                    count++
+                    step = Step.PREVIEW
                     render()
                 }
                 override fun onError(e: ImageCaptureException) {
@@ -209,80 +211,69 @@ class ProductScanActivity : AppCompatActivity() {
     // ── Steps ────────────────────────────────────────────────────────────────
 
     private fun render() {
-        val previewing = step == Step.FRONT_PREVIEW || step == Step.BACK_PREVIEW
+        val previewing = step == Step.PREVIEW
         cameraBar.visibility = if (previewing) View.GONE else View.VISIBLE
         previewBar.visibility = if (previewing) View.VISIBLE else View.GONE
         guide.visibility = if (previewing) View.GONE else View.VISIBLE
         photoView.visibility = if (previewing) View.VISIBLE else View.GONE
-        skipBtn.visibility = if (step == Step.FRONT) View.VISIBLE else View.GONE
         progress.visibility = View.GONE
-        when (step) {
-            Step.FRONT -> {
-                title.text = "1/2  समोरचा फोटो (नाव / ब्रँड)"
-                hint.text = "नाव आणि ब्रँड चौकटीत घ्या. हा फोटो ऐच्छिक आहे."
+        doneBtnCamera.visibility = if (count > 0) View.VISIBLE else View.GONE
+        addAnotherBtn.visibility = if (count < MAX_PHOTOS) View.VISIBLE else View.GONE
+        if (previewing) {
+            title.text = "फोटो $count/$MAX_PHOTOS ठीक आहे? अक्षरे स्पष्ट दिसत आहेत?"
+            hint.text = if (count < MAX_PHOTOS) "बाजू, मागचा भाग, तारीख यांचे आणखी फोटो घेऊ शकता." else "जास्तीत जास्त $MAX_PHOTOS फोटो झाले."
+            photoView.setImageBitmap(ScanPipeline.loadBitmap(photoFile(this, count), 1280))
+        } else {
+            title.text = "फोटो ${count + 1}/$MAX_PHOTOS"
+            hint.text = when (count) {
+                0 -> "समोरचा भाग (नाव, ब्रँड) चौकटीत घ्या."
+                else -> "मागचा भाग: बारकोड, MRP, वजन, तारीख. चमक येत असल्यास पाकीट थोडे तिरके धरा. अक्षरांवर टॅप करून फोकस करा."
             }
-            Step.BACK -> {
-                title.text = "2/2  मागचा फोटो (बारकोड, MRP, वजन, Expiry)"
-                hint.text = "बारकोड, MRP आणि तारीख चौकटीत घ्या. चमक येत असल्यास पाकीट थोडे तिरके धरा. अक्षरांवर टॅप करून फोकस करा."
-            }
-            Step.FRONT_PREVIEW, Step.BACK_PREVIEW -> {
-                title.text = if (step == Step.FRONT_PREVIEW) "समोरचा फोटो ठीक आहे?" else "मागचा फोटो ठीक आहे? अक्षरे स्पष्ट दिसत आहेत?"
-                hint.text = ""
-                val file = if (step == Step.FRONT_PREVIEW) frontFile(this) else backFile(this)
-                photoView.setImageBitmap(ScanPipeline.loadBitmap(file, 1280))
-            }
-            Step.PROCESSING -> {}
         }
     }
 
-    private fun usePhoto() {
-        if (step == Step.FRONT_PREVIEW) { step = Step.BACK; render() }
-        else if (step == Step.BACK_PREVIEW) startProcessing()
-    }
-
-    private fun retake() {
-        if (step == Step.FRONT_PREVIEW) { frontFile(this).delete(); step = Step.FRONT }
-        if (step == Step.BACK_PREVIEW) { backFile(this).delete(); step = Step.BACK }
+    private fun addAnother() {
         photoView.setImageDrawable(null)
+        step = Step.CAMERA
         render()
     }
 
-    private fun skipFront() {
-        frontSkipped = true
-        frontFile(this).delete()
-        step = Step.BACK
+    private fun retakeLast() {
+        if (count > 0) { photoFile(this, count).delete(); count-- }
+        photoView.setImageDrawable(null)
+        step = Step.CAMERA
         render()
     }
 
     private fun handleBack() {
         when (step) {
-            Step.FRONT_PREVIEW, Step.BACK_PREVIEW -> retake()
-            Step.BACK -> { step = Step.FRONT; frontSkipped = false; render() }
-            Step.FRONT -> finishCancelled()
-            Step.PROCESSING -> {}   // wait for the result
+            Step.PREVIEW -> addAnother()      // keep the photo, back to the camera
+            Step.CAMERA -> finishCancelled()
+            Step.PROCESSING -> {}             // wait for the result
         }
     }
 
     private fun startProcessing() {
+        if (count == 0) return
         step = Step.PROCESSING
         cameraBar.visibility = View.GONE
         previewBar.visibility = View.GONE
         guide.visibility = View.GONE
+        photoView.visibility = View.GONE
         progress.visibility = View.VISIBLE
-        title.text = "माहिती वाचत आहे…"
+        title.text = "$count फोटोंमधून माहिती वाचत आहे…"
         hint.text = ""
         camera?.cameraControl?.enableTorch(false)
         cameraProvider?.unbindAll()
 
-        val front = frontFile(this).takeIf { !frontSkipped && it.exists() }
-        val back = backFile(this)
+        val photos = (1..count).map { photoFile(this, it) }.filter { it.exists() }
         val appCtx = applicationContext
         worker.execute {
             val json = try {
-                ScanPipeline.run(front, back)
+                ScanPipeline.run(photos)
             } catch (t: Throwable) {
                 Log.e(TAG, "Scan pipeline failed", t)
-                try { ScanPipeline.emptyResult(front, back) } catch (_: Throwable) { null }
+                try { ScanPipeline.emptyResult(photos.size, t.javaClass.simpleName) } catch (_: Throwable) { null }
             }
             if (json != null) {
                 val tmp = File(appCtx.filesDir, "scan_result.tmp")
@@ -310,13 +301,15 @@ class ProductScanActivity : AppCompatActivity() {
 
     private fun bigButton(text: String, color: Int, onClick: () -> Unit) = Button(this).apply {
         this.text = text
-        textSize = 17f
+        textSize = 16f
         setTextColor(Color.WHITE)
         setBackgroundColor(color)
         minHeight = dp(60)
         isAllCaps = false
         setOnClickListener { onClick() }
     }
+
+    private fun weighted(w: Float) = LinearLayout.LayoutParams(0, WRAP_CONTENT, w).apply { setMargins(dp(4), 0, dp(4), 0) }
 
     @SuppressLint("ClickableViewAccessibility")
     private fun buildUi() {
@@ -363,11 +356,10 @@ class ProductScanActivity : AppCompatActivity() {
         }
         torchBtn = bigButton("🔦 चालू", grey) { toggleTorch() }
         captureBtn = bigButton("📸 फोटो घ्या", orange) { capture() }
-        skipBtn = bigButton("वगळा ⏭", grey) { skipFront() }
-        val w = LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { setMargins(dp(4), 0, dp(4), 0) }
-        cameraBar.addView(torchBtn, w)
-        cameraBar.addView(captureBtn, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1.6f).apply { setMargins(dp(4), 0, dp(4), 0) })
-        cameraBar.addView(skipBtn, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { setMargins(dp(4), 0, dp(4), 0) })
+        doneBtnCamera = bigButton("✓ झाले", green) { startProcessing() }
+        cameraBar.addView(torchBtn, weighted(1f))
+        cameraBar.addView(captureBtn, weighted(1.6f))
+        cameraBar.addView(doneBtnCamera, weighted(1f))
         root.addView(cameraBar, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.BOTTOM))
 
         previewBar = LinearLayout(this).apply {
@@ -376,10 +368,10 @@ class ProductScanActivity : AppCompatActivity() {
             setBackgroundColor(0x99000000.toInt())
             visibility = View.GONE
         }
-        previewBar.addView(bigButton("↺ पुन्हा घ्या", blue) { retake() },
-            LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { setMargins(dp(4), 0, dp(4), 0) })
-        previewBar.addView(bigButton("✓ हा फोटो वापरा", green) { usePhoto() },
-            LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { setMargins(dp(4), 0, dp(4), 0) })
+        addAnotherBtn = bigButton("+ आणखी फोटो", blue) { addAnother() }
+        previewBar.addView(bigButton("↺ पुन्हा घ्या", grey) { retakeLast() }, weighted(1f))
+        previewBar.addView(addAnotherBtn, weighted(1.2f))
+        previewBar.addView(bigButton("✓ झाले", green) { startProcessing() }, weighted(1f))
         root.addView(previewBar, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.BOTTOM))
 
         progress = LinearLayout(this).apply {

@@ -6,7 +6,8 @@ import {
   learnFromCorrection, findDuplicate, marathiToEnglish, englishToMarathi, buildPhotoItem,
   normalizeEngName, normalizeMarathiName, type NameMaps,
 } from '../src/lib/itemNames';
-import { formatScanDetails } from '../src/lib/androidScan';
+import { formatScanDetails, type ProductScanResult } from '../src/lib/androidScan';
+import { fillItemFromScan, scanReadNothing } from '../src/lib/photoFill';
 
 let failures = 0;
 const check = (label: string, cond: boolean, detail = '') => {
@@ -163,7 +164,7 @@ for (const c of strict) {
   eq(`${tag} name_marathi exact`, o.name_marathi, c.mr);
   eq(`${tag} name === name_marathi`, o.name, o.name_marathi);
   for (const [field, s] of [['name_eng', o.name_eng], ['name_marathi', o.name_marathi]] as const) {
-    check(`${tag} ${field} single spaces, trimmed`, !/\s{2,}|^\s|\s$/.test(s) && !/[\t ​-‍]/.test(s), JSON.stringify(s));
+    check(`${tag} ${field} single spaces, trimmed`, !/\s{2,}|^\s|\s$/.test(s) && !/[\t\u00a0\u200b-\u200d]/.test(s), JSON.stringify(s));
   }
   const brandMr = DEV_BRAND[c.brand.toLowerCase()];
   check(`${tag} whole Marathi brand word`, brandMr.some(b => o.name_marathi.split(' ').slice(0, b.split(' ').length).join(' ') === b), o.name_marathi);
@@ -180,22 +181,60 @@ eq('normalize eng litre', normalizeEngName('Fortune Oil 1 L'), 'fortune oil 1ltr
 eq('normalize marathi', normalizeMarathiName('पारले बिस्किट 250 g'), 'पारले बिस्किट २५० ग्रॅम');
 eq('normalize marathi kg', normalizeMarathiName('टाटा मीठ 1kg'), 'टाटा मीठ १ किलो');
 
-// ── "Copy details" text ──────────────────────────────────────────────────────
-const scanBase = {
+// ── "Copy details" text (multi-photo result) ─────────────────────────────────
+const scanBase: ProductScanResult = {
   name_eng: 'Original Gluco Biscuits', name_marathi: null, brand: 'Parle-G', unit: 'pcs', net_qty: '250 g', mrp: 10,
   barcode: '8901719101038', barcodeVerified: true, mfg_date: '2026-01-12', expiry_date: null,
-  confidence: { mrp: 0.95, brand: 0.75 }, source: { mrp: 'mlkit-ocr' as const, brand: 'mlkit-ocr' as const },
-  offStatus: 'skipped' as const, frontPhotoDataUrl: 'data:image/jpeg;base64,AAAA', backPhotoDataUrl: null,
+  confidence: { mrp: 0.95, brand: 0.75 }, source: { mrp: 'mlkit-ocr', brand: 'mlkit-ocr', barcode: 'mlkit-barcode' },
+  offStatus: 'skipped', photoCount: 3,
 };
 const details = formatScanDetails({ ...scanBase, debug: {
-  ocrBackLatin: '[h22] M.R.P Rs. 1O.OO', ocrFrontDevanagari: '[h30] पारले-जी',
-  barcodeMlkit: { value: '8901719101038', format: 'EAN_13', checksumOk: true, photo: 'back' },
-  parser: { mrp: { value: 10, confidence: 0.95 } }, timingsMs: { total: 1800 },
+  photos: [
+    { photo: 1, size: '2048x1536', barcodeMlkit: null, ocrLatin: '[h60] Parle-G', ocrDevanagari: '[h40] पारले-जी' },
+    { photo: 2, size: '2048x1536', barcodeMlkit: { value: '8901719101038', format: 'EAN_13', checksumOk: true }, ocrLatin: '[h14] Net Wt. 250g' },
+    { photo: 3, size: '2048x1536', barcodeMlkit: null, ocrLatin: '[h22] M.R.P Rs. 1O.OO' },
+  ],
+  pickedFrom: { mrp: 3, barcode: 2, brand: 1, mfg_date: 0 }, timingsMs: { total: 4200 },
 } });
-check('details has raw OCR', details.includes('M.R.P Rs. 1O.OO') && details.includes('पारले-जी'));
-check('details has barcode + source/conf', details.includes('EAN_13') && details.includes('mrp: 10 · mlkit-ocr · 0.95'));
-check('details excludes photos', !details.includes('base64'));
-check('details works without debug', formatScanDetails(scanBase).includes('ML Kit: not found'));
+check('details has raw OCR per photo', details.includes('PHOTO 3 · OCR Latin') && details.includes('M.R.P Rs. 1O.OO') && details.includes('पारले-जी'));
+check('details has barcode per photo', details.includes('PHOTO 2 (2048x1536) · barcode') && details.includes('EAN_13, checksum ok'));
+check('details shows source/conf/photo', details.includes('mrp: 10 · mlkit-ocr · 0.95 · photo 3') && details.includes('mfg_date: 2026-01-12 · - · - · all photos'));
+check('details has no image data', !details.includes('base64') && !details.includes('data:image'));
+check('details works without debug', formatScanDetails(scanBase).includes('BARCODE USED'));
+
+// ── Filling the Add / Edit popup from a scan ─────────────────────────────────
+const blankNew = { id: 'INV-new', name: '', unit: 'kg', price: 0, purchase_price: 0, stock_quantity: 0, barcode: '' };
+const scanFull: ProductScanResult = { ...scanBase, expiry_date: '2026-07-12' };
+const f1 = fillItemFromScan(blankNew, { isNew: true, touched: new Set() }, scanFull, maps);
+eq('new: Marathi name filled (shop style)', f1.item.name_marathi, 'पारले-जी ओरिजिनल ग्लुको बिस्किट २५० ग्रॅम');
+eq('new: name = name_marathi', f1.item.name, f1.item.name_marathi);
+eq('new: English name (hidden) filled', f1.item.name_eng, 'parle-g original gluco biscuits 250g');
+eq('new: brand / barcode / net_qty', [f1.item.brand, f1.item.barcode, f1.item.net_qty], ['Parle-G', '8901719101038', '250 g']);
+eq('new: MRP → purchase_price, sale rate defaults to MRP', [f1.item.purchase_price, f1.item.price], [10, 10]);
+eq('new: default unit kg → pcs', f1.item.unit, 'pcs');
+eq('new: dates', [f1.item.mfg_date, f1.item.expiry_date], ['2026-01-12', '2026-07-12']);
+eq('new: stock never filled', f1.item.stock_quantity, 0);
+check('new: search_key left to the normal save', !('search_key' in f1.item) || !f1.item.search_key);
+check('new: filled list', ['name', 'name_eng', 'barcode', 'purchase_price', 'price', 'unit'].every(k => f1.filled.includes(k as never)));
+
+const existing = { id: 'GVB-099', name: 'पारले बिस्किट', name_marathi: 'पारले बिस्किट', name_eng: '', unit: 'pcs', price: 9, purchase_price: 0, barcode: '', search_key: '' };
+const f2 = fillItemFromScan(existing, { isNew: false, touched: new Set() }, scanFull, maps);
+eq('edit: saved name kept', [f2.item.name, f2.item.name_marathi], ['पारले बिस्किट', 'पारले बिस्किट']);
+eq('edit: English name not added next to a saved name', f2.item.name_eng, '');
+eq('edit: saved sale rate kept', f2.item.price, 9);
+eq('edit: empty MRP / barcode filled', [f2.item.purchase_price, f2.item.barcode], [10, '8901719101038']);
+eq('edit: unit kept', f2.item.unit, 'pcs');
+check('edit: name/price not in filled', !f2.filled.includes('name') && !f2.filled.includes('price'));
+
+const typed = { ...blankNew, name: 'साखर', name_marathi: 'साखर', barcode: '123' };
+const f3 = fillItemFromScan(typed, { isNew: true, touched: new Set(['name', 'barcode', 'unit']) }, scanFull, maps);
+eq('typed values never overwritten', [f3.item.name, f3.item.barcode, f3.item.unit], ['साखर', '123', 'kg']);
+const f4 = fillItemFromScan({ ...blankNew, purchase_price: 0 }, { isNew: true, touched: new Set(['purchase_price']) }, scanFull, maps);
+eq('touched MRP (even 0) is not filled', f4.item.purchase_price, 0);
+const nothing = fillItemFromScan(blankNew, { isNew: true, touched: new Set() },
+  { ...scanBase, name_eng: null, brand: null, mrp: null, barcode: null, net_qty: null, mfg_date: null, unit: 'pcs' }, maps);
+check('empty scan: popup unchanged except unit', nothing.item.name === '' && nothing.item.barcode === '' && nothing.item.price === 0);
+check('scanReadNothing', scanReadNothing({ ...scanBase, name_eng: null, brand: null, mrp: null, barcode: null, net_qty: null, mfg_date: null }));
 
 if (failures) { console.error(`\n${failures} check(s) failed`); process.exit(1); }
 console.log('All item-name checks passed');
