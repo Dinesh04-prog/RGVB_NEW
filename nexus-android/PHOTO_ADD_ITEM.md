@@ -3,7 +3,9 @@
 A **📷 Fill from Photos** button sits at the top of the normal **Add / Edit Inventory Item** popup
 (only inside the Android app). Take 1–5 photos of the pack (front, back, side, crimp); the app reads them on the
 phone and fills the popup's empty fields. Everything stays editable, and **SAVE CHANGES** works exactly as before.
-Running cost: **zero**, with no API keys and no billing account. All text of this feature is English; only product
+When the phone is online and the build has a Gemini Worker (see **Gemini** below), the photos are also read by Google
+Gemini (free tier) through a small Cloudflare Worker; the phone's own reading stays as the fallback and cross-check.
+Running cost: **zero** (free tiers, no billing account). All text of this feature is English; only product
 data (Marathi names) is in Devanagari. Colours follow the app: blue `#0d6efd` (main buttons), light blue `#e7f1ff`,
 dark blue `#0a3d62`, green `#16A34A` (Done), white backgrounds, and a soft yellow `#FFF9DB` for "auto-filled, check this".
 
@@ -15,20 +17,25 @@ Add / Edit popup → "📷 Fill from Photos"                   PhotoScanFill.tsx
   → ProductScanActivity (CameraX, ~12 MP): "Photo 2/5", "↺ Retake", "+ Add another photo", "✓ Done",
     tap-to-focus, torch, guide frame. Each shot focuses first; each photo is checked for blur / dark / glare
     and a problem makes "Retake" the main button (the user may keep the photo).
-  → ScanPipeline (background thread), per photo at full resolution:
+  → ScanPipeline (background thread):
+      Gemini (if configured, switched on and online): 1–5 JPEGs ≤ 1280 px → GeminiClient → gemini-worker → Gemini;
+        sent first, answered while the phone reads the photos (waits at most 20 s more)
+      per photo at full resolution:
       ML Kit barcode; OCR Latin as taken (turned 90°/270° only when that reads very little text);
       OCR Devanagari; OCR Latin again on a grey contrast-stretched copy and, if some reads are weak, a sharpened copy;
       OcrMerge: one line per region (highest ML Kit confidence wins), read column by column
   → ScanMerge.kt picks each field across photos (below)
-  → Open Food Facts (free, no key): fills blank name / brand / size; disagreements with weak reads become suggestions
+  → Open Food Facts (free, no key): one lookup for a checksum-valid barcode
+  → SourceMerge.kt: Gemini first when sure, cross-checked with the phone's OCR and Open Food Facts (see Gemini)
   → result JSON in filesDir/scan_result.json → MainActivity → window.onProductScanResult(json)
   → photoFill.ts fills only empty fields of the open popup → the user edits → SAVE CHANGES
   → saveInventoryEdit() → upsertInventoryItem() (the only write path)
 ```
 
 **Bridge result** (`ProductScanResult` in `src/lib/androidScan.ts`): `name_eng, name_marathi, brand, unit, net_qty,
-mrp, mrp_alternates[], barcode, barcodeVerified, mfg_date, expiry_date, confidence{}, source{}, offStatus, photoCount,
-warnings[], suggestions{}, recognised[], debug`. Photos and thumbnails are **not** sent to the web app.
+mrp, mrp_alternates[], alternates{name_eng, net_qty, mrp}, barcode, barcodeVerified, mfg_date, expiry_date,
+confidence{}, source{} (mlkit-ocr / mlkit-barcode / gemini / openfoodfacts per field), offStatus, geminiStatus,
+photoCount, warnings[], suggestions{barcode}, recognised[], debug`. Photos and thumbnails are **not** sent to the web app.
 
 ### Merging photos (ScanMerge.kt)
 * **Barcode:** the first photo whose ML Kit barcode passes the EAN/UPC checksum. Otherwise checksum-valid digits
@@ -144,8 +151,13 @@ transliteration (flagged). Word pairs the user corrects are remembered in Indexe
   spaced inkjet dates, and an accuracy table over 35 noisy label samples with a minimum per field), `ScanMergeTest`
   (MRP only on photo 3, barcode only on photo 2, bad checksum on one photo, best-before and PKD on different photos,
   conflicting names and MRPs), `AccuracyHelpersTest` (spelling fixes, pass merging, reading order, rotation choice,
-  blur / dark / glare, MRP candidates and rejections, weight limits, alternates and warnings) and `ReplayTest`.
-  It runs in CI before `assembleRelease`.
+  blur / dark / glare, MRP candidates and rejections, weight limits, alternates and warnings), `SourceMergeTest`
+  (Gemini vs OCR vs Open Food Facts: agreeing, disagreeing, missing, Gemini failed or unsure, barcode only from the
+  phone, Marathi threshold) and `ReplayTest`. It runs in CI before `assembleRelease`, with or without the Gemini secrets.
+* `gemini-worker`: `npm test` (request checks, answer validation, kill switch, auth and key rotation, limits, failure
+  codes, no secrets in logs); `npm run measure` for the CPU estimate.
+* `t01-tasty-nuts-shing-bhujia.txt` is **SYNTHETIC** (written from the diagnosis of a real scan). Replace its OCR lines
+  with the real **📋 Copy details** text when available (instructions in the file header).
 * **Replay samples:** `app/src/test/resources/ocr-samples/*.txt`, one scan per file (format in `README.txt` there):
   expected values plus the OCR lines of each photo and pass (`latin`, `latin enhanced`, `latin rot90/rot270`,
   `devanagari`), with box positions and ML Kit confidence. They are typed by hand with realistic OCR mistakes, not
@@ -201,16 +213,105 @@ The Excel auto-sync only runs on a desktop browser that has an Excel file linked
 4. Learned name corrections stay only on that phone (IndexedDB key `photo_name_map`).
    Clear the app's storage to reset them; they are never uploaded.
 
-## Phase 2 notes (not built)
+## Gemini (online reading of the photos)
 
-**Optional "Try smart read" with Gemini.** Deferred.
-* Free tier (checked 2026-10-11): Flash / Flash-Lite models only. Quotas are shown per project in AI Studio, not in a public table.
-  Free-tier inputs **may be used to improve Google products and read by human reviewers**. It is not available for users in the EEA/UK.
-  Label photos are not sensitive, so this is acceptable, but check the terms again before building.
-* The key must never be in the APK, the web bundle or a `VITE_` variable. Plan: a Cloudflare Worker (free plan, no card)
-  holding `GEMINI_API_KEY` as a secret (`npx wrangler secret put GEMINI_API_KEY`), with a request size cap, the
-  rate-limit binding (10 s / 60 s windows only) and strict JSON output (null when unsure, per-field confidence).
-* Blocker: the app does not keep the Google ID token (`LoginPage.tsx` decodes and drops it; tokens expire after 1 h).
-  The Worker needs a way to authenticate the caller, for example storing the credential and asking for sign-in again on expiry.
-  That means a change to login and token handling, which was out of scope.
-* Hook point: `ScanPipeline.run` already reports `source` per field; add `"gemini"` results the same way, as suggestions.
+**Photograph only the pack — never people, customers, bills or screens.** Free-tier Gemini inputs may be used by
+Google to improve its products and may be read by human reviewers (terms checked 2026-10-12). The camera screen says
+"Photos are read by Google Gemini when online." and has a **Use Gemini when online** switch (kept on the phone, default on).
+
+### How the readers are combined (SourceMerge.kt)
+* **Gemini is primary** for name, brand, size, MRP and dates when its confidence is ≥ 0.6.
+  If the phone's OCR or Open Food Facts gives the same value, the confidence goes up. If one disagrees, Gemini's value
+  is kept but the field is yellow and the other values are chips under **English name**, **PACK SIZE** and **MRP**.
+* **No usable Gemini value** (off, offline, failed, or unsure): the phone's reading, as before. Open Food Facts fills a
+  blank, and when it disagrees with a weak OCR read it is used (yellow) with the OCR read as a chip ("tasty sugar").
+* **Barcode** comes only from ML Kit (checksum-validated). A barcode only Gemini read is never filled; it is shown under
+  the barcode field as "Barcode read by Gemini (not verified, check it)".
+* **Marathi name** from Gemini only when it is ≥ 0.8 sure. Even then the shop's spellings win (learned corrections,
+  inventory words, the medicine / product list, brands: a Gemini word that sounds the same is replaced), the short-name
+  rules are applied, the field is yellow and the popup asks to check the name. Otherwise Marathi is built from the
+  short English name as before.
+* Gemini's full English name goes through the same spelling fixes, short-name rules, `full_name_eng` and learning as
+  the phone's reading ("Tasty Nuts Shing Bhujia" + 38 g → `tasty nuts shing bhujia 38g`).
+* **A scan never fails because of Gemini.** Offline, daily limit reached, quota used up, timeout or a bad answer: a short
+  English note in the popup ("Gemini's daily limit is reached. Filled from the phone's reading only.") and the phone's
+  result. **📋 Copy details** shows the source of every field, the phone-only values, the Gemini status, model, time,
+  what the Worker's checks dropped, and the raw Gemini JSON.
+
+### The Worker (`gemini-worker/`)
+* Cloudflare Workers free plan. The Gemini API key is a Worker **secret**; it is never in the APK, the web bundle or a
+  `VITE_` variable. The app sends a shared **app key** (`X-App-Key`, from the `GEMINI_APP_KEY` GitHub secret) and a
+  random per-install id (`X-Device-Id`). The app key can be pulled out of an APK by someone determined, so the Worker
+  bounds the damage: **6 scans / minute per device**, **`DAILY_CAP` scans per day** for all phones (default 150),
+  **1.5 MB** per request, **1–5 JPEGs**, and the Google project has **no billing**, so the worst case is "Gemini off until
+  midnight Pacific", never a bill.
+* Gemini is called with JSON output and a schema; the Worker then checks every field (types, units "38gm" → "38 g",
+  MRP ₹1–₹10,000 from "10/-", "Rs.10", "₹10", real dates, barcode checksum, confidence 0–1, unknown keys dropped).
+* Model: `GEMINI_MODEL` in `gemini-worker/wrangler.toml` (default `gemini-3.5-flash-lite`). Free daily limits are only
+  shown in AI Studio (third-party measurements in 2026: about 500/day for 3.5 Flash-Lite, only about 20/day for 3.6 Flash).
+  **To change the model:** edit `GEMINI_MODEL`, then `npx wrangler deploy` in `gemini-worker` (no app rebuild).
+* CPU: the free plan allows 10 ms CPU per request (waiting for Gemini does not count). The photos are not JSON-parsed in
+  the Worker; `npm run measure` (after `npx wrangler deploy --dry-run --outdir dist`) measured about 3 ms median for a
+  maximum 5-photo request on a PC. The real figure is shown in the Cloudflare dashboard (Workers → nexuspos-gemini → Metrics).
+* Never logged: the app key, the API key, photos. Logs contain only error codes.
+
+### Deploy (one time, about 20 minutes)
+You need: a Google account, a Cloudflare account (free, no card), Node.js 22+, and the repository on your PC.
+
+1. **Gemini API key (no billing).** Open https://aistudio.google.com → **Get API key** → **Create API key** →
+   choose **Create API key in new project**. Do not link a billing account to that project. Copy the key.
+2. **Check the real free quota.** In AI Studio open the usage / **Rate limits** page from the left menu (the exact
+   menu name changes from time to time), select the new project and look at `gemini-3.5-flash-lite`: requests per day
+   (RPD) and per minute. Google no longer publishes these numbers anywhere else. Keep
+   `DAILY_CAP` in `gemini-worker/wrangler.toml` well under the RPD (e.g. 150 when RPD is 500).
+3. **Install and log in** (in a terminal):
+   ```
+   cd gemini-worker
+   npm i
+   npx wrangler login
+   ```
+   (`npm i` uses `legacy-peer-deps` from `.npmrc`; `wrangler login` opens the browser to allow access.)
+4. **Daily counter storage:**
+   ```
+   npx wrangler kv namespace create USAGE
+   ```
+   Copy the printed `id` into `wrangler.toml` in place of `REPLACE_WITH_KV_NAMESPACE_ID`.
+5. **Secrets.** Make a random app key (keep it; it goes into GitHub in step 8):
+   ```
+   node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"
+   npx wrangler secret put GEMINI_API_KEY      (paste the AI Studio key)
+   npx wrangler secret put APP_KEY             (paste the random app key)
+   ```
+6. **Deploy:**
+   ```
+   npx wrangler deploy
+   ```
+   It prints the Worker URL, e.g. `https://nexuspos-gemini.<your-subdomain>.workers.dev`.
+7. **Quick check** (should answer `{"ok":false,"error":"unauthorized"}` — the Worker is up and refuses calls without the key):
+   ```
+   curl -X POST https://nexuspos-gemini.<your-subdomain>.workers.dev/read
+   ```
+8. **GitHub secrets.** In the repository on github.com: **Settings → Secrets and variables → Actions →
+   New repository secret**, twice:
+   * `GEMINI_WORKER_URL` = the Worker URL from step 6 (without `/read`)
+   * `GEMINI_APP_KEY` = the random app key from step 5
+   GitHub hides secret values in build logs, and the build never prints them.
+9. **Build the APK:** push to `main` (or **Actions → Build NexusPOS Android APK → Run workflow**). Install the APK.
+   Without the two secrets the APK is built exactly as before, with Gemini off.
+
+### Turn it off
+* **Everyone, at once, no rebuild:** in `gemini-worker/wrangler.toml` set `ENABLED = "false"`, then `npx wrangler deploy`
+  (or Cloudflare dashboard → Workers → nexuspos-gemini → Settings → Variables → `ENABLED`). Phones show
+  "Gemini could not read the photos this time" and use their own reading.
+* **One phone:** untick **Use Gemini when online** on the camera screen.
+* **Remove it from the app:** delete the `GEMINI_WORKER_URL` GitHub secret and build again (the switch disappears).
+
+### Rotate the app key (if it may have leaked)
+1. Make a new key (command in step 5).
+2. Keep the old one working while phones update: `npx wrangler secret put APP_KEY_PREVIOUS` (paste the **old** key),
+   then `npx wrangler secret put APP_KEY` (paste the **new** key).
+3. Update the `GEMINI_APP_KEY` GitHub secret to the new key, build, and install the new APK on every phone.
+4. Then stop the old key: `npx wrangler secret delete APP_KEY_PREVIOUS`.
+
+To rotate the Gemini API key: create a new key in AI Studio, `npx wrangler secret put GEMINI_API_KEY`, then delete the
+old key in AI Studio. No app change is needed.
