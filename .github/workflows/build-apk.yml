@@ -125,10 +125,18 @@ jobs:
       - name: Run unit tests
         working-directory: nexus-android
         run: gradle testDebugUnitTest --no-daemon
+        # Gemini Worker URL and app key (optional). Empty when the secrets are not set: Gemini is off.
+        # GitHub masks secret values in the log; the build never prints them.
+        env:
+          GEMINI_WORKER_URL: ${{ secrets.GEMINI_WORKER_URL }}
+          GEMINI_APP_KEY: ${{ secrets.GEMINI_APP_KEY }}
 
       - name: Build release APK
         working-directory: nexus-android
         run: gradle assembleRelease --no-daemon
+        env:
+          GEMINI_WORKER_URL: ${{ secrets.GEMINI_WORKER_URL }}
+          GEMINI_APP_KEY: ${{ secrets.GEMINI_APP_KEY }}
 
       - name: Print APK size
         run: |

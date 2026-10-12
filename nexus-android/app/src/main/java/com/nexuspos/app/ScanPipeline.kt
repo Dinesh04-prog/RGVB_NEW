@@ -17,8 +17,12 @@ import com.google.mlkit.vision.text.devanagari.DevanagariTextRecognizerOptions
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import org.json.JSONArray
 import org.json.JSONObject
+import android.content.Context
 import java.io.File
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 /**
  * 1–5 photos of one pack → product details. Runs on a background thread; every step is best-effort, so a
@@ -31,7 +35,9 @@ import java.util.concurrent.TimeUnit
  *     OCR Latin again on a grey, contrast-stretched copy, and on a sharpened copy when some reads are weak
  *     OcrMerge: one line per region (highest ML Kit confidence wins), in column reading order
  *   ScanMerge: picks each field across photos (MRP: all readings of all passes vote, see ScanMerge.kt)
- *   Open Food Facts (free): fills blank name / brand / size; disagreements with weak reads become suggestions
+ *   Gemini (GeminiClient → gemini-worker, online, optional): sent before OCR starts, read while OCR runs
+ *   Open Food Facts (free): one lookup for a checksum-valid barcode
+ *   SourceMerge: Gemini first when sure, cross-checked with OCR and Open Food Facts (see SourceMerge.kt)
  *
  * Photos are not returned to the web app; only text fields and raw debug text.
  */
@@ -40,14 +46,26 @@ object ScanPipeline {
     private const val TAG = "NexusPOS"
     private const val OCR_MAX_EDGE = 4096       // a 12 MP photo (4000×3000) is read at full size
     private const val OCR_FALLBACK_EDGE = 2048  // only after running out of memory
-    private const val WEAK = 0.6
     private const val MAX_RECOGNISED = 150
 
-    fun run(photos: List<File>): JSONObject {
+    fun run(ctx: Context, photos: List<File>): JSONObject {
         val t0 = System.currentTimeMillis()
         val debugPhotos = JSONArray()
         val recognised = JSONArray()
         val scans = mutableListOf<ScanMerge.Photo>()
+
+        // Gemini (online, optional): small JPEGs first, then the request runs while ML Kit reads the photos.
+        // Nothing here can fail the scan: every problem becomes a status.
+        val geminiPool = Executors.newSingleThreadExecutor()
+        var geminiSkip = GeminiClient.skipReason(ctx)
+        val geminiFuture: Future<GeminiClient.Outcome>? = if (geminiSkip != null) null else try {
+            GeminiClient.encode(photos)?.let { images -> geminiPool.submit<GeminiClient.Outcome> { GeminiClient.read(ctx, images) } }
+                .also { if (it == null) geminiSkip = "error" }
+        } catch (t: Throwable) {
+            Log.w(TAG, "Gemini prepare failed: ${t.javaClass.simpleName}")
+            geminiSkip = "error"
+            null
+        }
 
         // One photo at a time, so only one big bitmap is in memory on cheap phones
         photos.forEachIndexed { i, file ->
@@ -101,83 +119,68 @@ object ScanPipeline {
         val t1 = System.currentTimeMillis()
 
         val m = ScanMerge.merge(scans)
-        val confidence = JSONObject()
-        val source = JSONObject()
-        val suggestions = JSONObject()
-        val ocrSrc = "mlkit-ocr"
 
-        var name = m.name.value
-        var nameConf = m.name.confidence
-        var brand = m.brand.value
-        var brandConf = m.brand.confidence
-        var qty = m.netQty.value
-        var qtyConf = m.netQty.confidence
-        if (name != null) source.put("name_eng", ocrSrc)
-        if (brand != null) source.put("brand", ocrSrc)
-        if (qty != null) source.put("net_qty", ocrSrc)
+        // Gemini's answer (waits at most GEMINI_WAIT_MS more; it has been running during OCR)
+        val gemini: GeminiClient.Outcome = geminiFuture?.let { f ->
+            try { f.get(GEMINI_WAIT_MS, TimeUnit.MILLISECONDS) } catch (e: TimeoutException) {
+                f.cancel(true); GeminiClient.Outcome("timeout")
+            } catch (t: Throwable) {
+                GeminiClient.Outcome("error")
+            }
+        } ?: GeminiClient.Outcome(geminiSkip ?: "error")
+        geminiPool.shutdownNow()
 
-        // Open Food Facts — only for a valid barcode and only when something is blank or weak.
-        // Blank fields are filled; a weak read that disagrees stays, and the Open Food Facts value is a suggestion.
+        // Open Food Facts: one call per scan for a checksum-valid barcode; cross-checks name, brand and size
         var offStatus = "skipped"
         var offDebug: JSONObject? = null
-        val needsHelp = name == null || nameConf < WEAK || brand == null || brandConf < WEAK || qty == null || qtyConf < WEAK
+        var off: SourceMerge.OffRead? = null
         val barcode = m.barcode
-        if (barcode != null && m.barcodeVerified && needsHelp) {
+        if (barcode != null && m.barcodeVerified) {
             val res = OpenFoodFacts.lookup(barcode)
             offStatus = res.status
             res.product?.let { p ->
                 offDebug = JSONObject().put("name", p.name ?: JSONObject.NULL)
                     .put("brand", p.brand ?: JSONObject.NULL).put("quantity", p.quantity ?: JSONObject.NULL)
-                val offName = p.name?.let { stripSize(it) }?.ifBlank { null }
-                when {
-                    offName == null -> {}
-                    name == null -> { name = offName; nameConf = 0.5; source.put("name_eng", "openfoodfacts") }
-                    similar(name!!, offName) -> nameConf = maxOf(nameConf, 0.7)
-                    nameConf < WEAK -> suggestions.put("name_eng", offName)
-                }
-                when {
-                    p.brand == null -> {}
-                    brand == null -> { brand = p.brand; brandConf = 0.5; source.put("brand", "openfoodfacts") }
-                    similar(brand!!, p.brand) -> brandConf = maxOf(brandConf, 0.8)
-                    brandConf < WEAK -> suggestions.put("brand", p.brand)
-                }
-                val offQty = p.quantity?.let { LabelParser.normalizeQty(it) }
-                when {
-                    offQty == null -> {}
-                    qty == null -> { qty = offQty; qtyConf = 0.5; source.put("net_qty", "openfoodfacts") }
-                    qty == offQty -> qtyConf = maxOf(qtyConf, 0.85)
-                    else -> suggestions.put("net_qty", offQty)
-                }
+                off = SourceMerge.OffRead(p.name?.let { stripSize(it) }?.ifBlank { null }, p.brand,
+                    p.quantity?.let { LabelParser.normalizeQty(it) })
             }
         }
 
+        val r = SourceMerge.merge(m, gemini.read, off)
+        val confidence = JSONObject()
+        val source = JSONObject()
         val out = JSONObject()
-        out.put("name_eng", name ?: JSONObject.NULL)
-        out.put("name_marathi", m.nameMarathi.value ?: JSONObject.NULL)
-        out.put("brand", brand ?: JSONObject.NULL)
+        fun <T> put(key: String, v: SourceMerge.Value<T>) {
+            out.put(key, v.value ?: JSONObject.NULL)
+            if (v.value != null) { confidence.put(key, v.confidence); source.put(key, v.source) }
+        }
+        put("name_eng", r.nameEng)
+        put("name_marathi", r.nameMarathi)
+        put("brand", r.brand)
+        put("net_qty", r.netQty)
+        put("mrp", r.mrp)
+        put("mfg_date", r.mfgDate)
+        put("expiry_date", r.expiryDate)
         out.put("unit", "pcs")
-        out.put("net_qty", qty ?: JSONObject.NULL)
-        out.put("mrp", m.mrp.value ?: JSONObject.NULL)
-        out.put("mrp_alternates", JSONArray(m.mrpAlternates))
-        out.put("alternates", JSONObject().put("mrp", JSONArray(m.mrpAlternates)).put("net_qty", JSONArray(m.qtyAlternates)))
+        out.put("mrp_alternates", JSONArray(r.mrp.alternates))
+        out.put("alternates", JSONObject().put("mrp", JSONArray(r.mrp.alternates)).put("net_qty", JSONArray(r.netQty.alternates))
+            .put("name_eng", JSONArray(r.nameEng.alternates)))
         out.put("barcode", barcode ?: JSONObject.NULL)
         out.put("barcodeVerified", m.barcodeVerified)
-        out.put("mfg_date", m.mfgDate.value ?: JSONObject.NULL)
-        out.put("expiry_date", m.expiryDate.value ?: JSONObject.NULL)
-        out.put("offStatus", offStatus)
-        out.put("photoCount", photos.size)
-        out.put("warnings", JSONArray(m.warnings))
-        out.put("suggestions", suggestions)
-        out.put("recognised", recognised)
-
-        if (name != null) confidence.put("name_eng", nameConf)
-        if (brand != null) confidence.put("brand", brandConf)
-        if (qty != null) confidence.put("net_qty", qtyConf)
         if (barcode != null) { confidence.put("barcode", m.barcodeConfidence); source.put("barcode", m.barcodeSource) }
-        if (m.nameMarathi.value != null) { confidence.put("name_marathi", m.nameMarathi.confidence); source.put("name_marathi", ocrSrc) }
-        if (m.mrp.value != null) { confidence.put("mrp", m.mrp.confidence); source.put("mrp", ocrSrc) }
-        if (m.mfgDate.value != null) { confidence.put("mfg_date", m.mfgDate.confidence); source.put("mfg_date", ocrSrc) }
-        if (m.expiryDate.value != null) { confidence.put("expiry_date", m.expiryDate.confidence); source.put("expiry_date", ocrSrc) }
+        out.put("offStatus", offStatus)
+        out.put("geminiStatus", gemini.status)
+        out.put("photoCount", photos.size)
+        val warnings = m.warnings.toMutableList()
+        val mfg = r.mfgDate.value
+        val exp = r.expiryDate.value
+        if (mfg != null && exp != null && exp <= mfg && warnings.none { it.contains("expiry date") }) {
+            warnings += "The expiry date read ($exp) is not after the manufacture date ($mfg). Check both dates."
+        }
+        out.put("warnings", JSONArray(warnings))
+        // A barcode only Gemini saw is never filled: offered as an unverified suggestion
+        out.put("suggestions", JSONObject().apply { r.barcodeSuggestion?.let { put("barcode", it) } })
+        out.put("recognised", recognised)
         out.put("confidence", confidence)
         out.put("source", source)
 
@@ -187,10 +190,17 @@ object ScanPipeline {
             .put("photos", debugPhotos)
             .put("pickedFrom", picked)
             .put("mrpReadings", JSONArray(m.mrpDebug))
+            .put("ocrOnly", JSONObject()
+                .put("name_eng", m.name.value ?: JSONObject.NULL).put("brand", m.brand.value ?: JSONObject.NULL)
+                .put("net_qty", m.netQty.value ?: JSONObject.NULL).put("mrp", m.mrp.value ?: JSONObject.NULL))
+            .put("gemini", JSONObject().put("status", gemini.status).put("model", gemini.model ?: JSONObject.NULL)
+                .put("ms", gemini.ms).put("raw", gemini.raw ?: JSONObject.NULL).put("problems", JSONArray(gemini.problems)))
             .put("openFoodFacts", offDebug ?: JSONObject.NULL)
             .put("timingsMs", JSONObject().put("photos", t1 - t0).put("total", System.currentTimeMillis() - t0)))
         return out
     }
+
+    private const val GEMINI_WAIT_MS = 20_000L
 
     /** Result when processing itself crashed: the popup stays as it is, with a short message. */
     fun emptyResult(photoCount: Int, error: String): JSONObject = JSONObject().apply {
@@ -213,13 +223,6 @@ object ScanPipeline {
         s.replace(Regex("""\d+(?:[.,]\d+)?\s*(?:g|gm|gms|kg|ml|l|ltr)\b""", RegexOption.IGNORE_CASE), " ")
             .replace(Regex("""\s+"""), " ").trim()
 
-    /** Same name/brand apart from case, spacing, punctuation or a couple of OCR letters. */
-    private fun similar(a: String, b: String): Boolean {
-        val x = a.lowercase().replace(Regex("""[^a-z0-9]"""), "")
-        val y = b.lowercase().replace(Regex("""[^a-z0-9]"""), "")
-        if (x.isEmpty() || y.isEmpty()) return false
-        return x == y || x.contains(y) || y.contains(x) || NameSpell.osa(x, y, 2) <= 2
-    }
 
     private fun <T> await(task: Task<T>): T? = try {
         Tasks.await(task, 15, TimeUnit.SECONDS)

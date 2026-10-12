@@ -860,6 +860,46 @@ export const learnDroppedWords = (
   return next;
 };
 
+// ── Marathi name read by Gemini ──────────────────────────────────────────────
+//
+// Used only when Gemini was ≥ 0.8 sure (decided on the phone). The shop's own spellings still win: each Gemini word
+// that sounds the same (apart from long / short vowels) as a word of the shop's lists (learned corrections,
+// inventory names, medicine / product phrases, brands) is replaced by the shop's spelling ("भुजीया" → "भुजिया").
+
+const shopDevanagariWords = (maps: NameMaps): string[] => {
+  const words = new Set<string>();
+  for (const m of [maps.learned, maps.inventory, PRODUCT_PHRASES, BRAND_MARATHI, LOANWORDS]) {
+    for (const [k, v] of Object.entries(m)) {
+      if (k.startsWith('!')) continue;
+      for (const w of v.split(/\s+/)) if (/[ऀ-ॿ]{2,}/.test(w)) words.add(w);
+    }
+  }
+  return [...words];
+};
+
+// Long and short vowels sound alike in a spelling check ("bhujeeyaa" / "bhujiyaa" → "bhujiya")
+const soundKey = (dev: string) => transliterateDevanagariToLatin(dev).toLowerCase().replace(/[^a-z]/g, '')
+  .replace(/ee|ii/g, 'i').replace(/oo|uu/g, 'u').replace(/aa/g, 'a');
+
+export const shopSpellMarathi = (dev: string, maps: NameMaps): { text: string; replaced: [string, string][] } => {
+  const shop = shopDevanagariWords(maps);
+  const shopSet = new Set(shop);
+  const keyed = shop.map(w => [w, soundKey(w)] as const).filter(([, k]) => k.length >= 3);
+  const replaced: [string, string][] = [];
+  const text = hindiToMarathi(dev.trim()).text.split(/\s+/).filter(Boolean).map(w => {
+    if (shopSet.has(w) || !/[ऀ-ॿ]/.test(w)) return w;
+    const k = soundKey(w);
+    if (k.length < 3) return w;
+    // Same sound only (vowel length aside): "शिंग" must not become "शेंगा"
+    const close = keyed.filter(([, sk]) => sk === k);
+    const spellings = [...new Set(close.map(([s]) => s))];
+    if (spellings.length !== 1) return w;           // none, or unclear: keep Gemini's word
+    replaced.push([w, spellings[0]]);
+    return spellings[0];
+  }).join(' ');
+  return { text, replaced };
+};
+
 // ── Two name fields (Add / Edit popup) ───────────────────────────────────────
 //
 // The popup edits name_eng and name_marathi separately; neither is ever converted from the other.

@@ -21,6 +21,7 @@ import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -109,6 +110,7 @@ class ProductScanActivity : AppCompatActivity() {
     private lateinit var addAnotherBtn: Button
     private lateinit var progress: LinearLayout
     private lateinit var progressText: TextView
+    private lateinit var geminiRow: LinearLayout
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -275,6 +277,7 @@ class ProductScanActivity : AppCompatActivity() {
         val previewing = step == Step.PREVIEW
         val checking = step == Step.CHECKING
         cameraBar.visibility = if (step == Step.CAMERA) View.VISIBLE else View.GONE
+        geminiRow.visibility = if (step == Step.CAMERA && GeminiClient.configured()) View.VISIBLE else View.GONE
         previewBar.visibility = if (previewing) View.VISIBLE else View.GONE
         guide.visibility = if (step == Step.CAMERA) View.VISIBLE else View.GONE
         photoView.visibility = if (previewing) View.VISIBLE else View.GONE
@@ -341,6 +344,7 @@ class ProductScanActivity : AppCompatActivity() {
         if (count == 0) return
         step = Step.PROCESSING
         cameraBar.visibility = View.GONE
+        geminiRow.visibility = View.GONE
         previewBar.visibility = View.GONE
         guide.visibility = View.GONE
         photoView.visibility = View.GONE
@@ -355,7 +359,7 @@ class ProductScanActivity : AppCompatActivity() {
         val appCtx = applicationContext
         worker.execute {
             val json = try {
-                ScanPipeline.run(photos)
+                ScanPipeline.run(appCtx, photos)
             } catch (t: Throwable) {
                 Log.e(TAG, "Scan pipeline failed", t)
                 try { ScanPipeline.emptyResult(photos.size, t.javaClass.simpleName) } catch (_: Throwable) { null }
@@ -451,6 +455,27 @@ class ProductScanActivity : AppCompatActivity() {
         title = TextView(this).apply { setTextColor(DARK_BLUE); textSize = 18f; setTypeface(typeface, android.graphics.Typeface.BOLD) }
         hint = TextView(this).apply { setTextColor(GREY); textSize = 14f; setPadding(0, dp(4), 0, dp(4)) }
         top.addView(title); top.addView(hint)
+
+        // Gemini switch (persistent, default on) and the data note; only in builds with a Gemini Worker
+        geminiRow = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = if (GeminiClient.configured()) View.VISIBLE else View.GONE
+            addView(CheckBox(this@ProductScanActivity).apply {
+                text = "Use Gemini when online"
+                textSize = 14f
+                setTextColor(DARK_BLUE)
+                buttonTintList = ColorStateList.valueOf(BLUE)
+                minHeight = dp(48)
+                isChecked = GeminiClient.usedByUser(this@ProductScanActivity)
+                setOnCheckedChangeListener { _, on -> GeminiClient.setUsedByUser(this@ProductScanActivity, on) }
+            })
+            addView(TextView(this@ProductScanActivity).apply {
+                text = "Photos are read by Google Gemini when online."
+                textSize = 12f
+                setTextColor(GREY)
+            })
+        }
+        top.addView(geminiRow)
         root.addView(top, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.TOP))
 
         cameraBar = bar()

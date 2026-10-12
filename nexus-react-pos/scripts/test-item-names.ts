@@ -5,7 +5,7 @@ import {
   makeSearchKey, qtyEng, qtyMarathi, buildInventoryWordMap, composeNames,
   learnFromCorrection, findDuplicate, marathiToEnglish, englishToMarathi, buildPhotoItem,
   normalizeEngName, normalizeMarathiName, shortBilingualName, printedLength, learnDroppedWords, SHORT_NAME_LIMITS,
-  itemNameFields, withItemNames, buildSpellVocab, spellFixEnglish, spellFixWord, osaDistance, learnSpellingFixes,
+  itemNameFields, withItemNames, buildSpellVocab, spellFixEnglish, spellFixWord, osaDistance, learnSpellingFixes, shopSpellMarathi,
   type NameMaps,
 } from '../src/lib/itemNames';
 import { formatScanDetails, type ProductScanResult } from '../src/lib/androidScan';
@@ -414,6 +414,36 @@ const tastyFill = fillItemFromScan(blankNew, { isNew: true, touched: new Set() }
   { ...scanBase, brand: 'Tasty Nuts', name_eng: 'Shing Bhujia', net_qty: '38 g', mrp: 10, barcode: null }, { ...maps, vocab });
 eq('Tasty Nuts: fill', [tastyFill.item.name_eng, tastyFill.item.purchase_price, tastyFill.item.net_qty], ['tasty nuts shing bhujia 38g', 10, '38 g']);
 check('Tasty Nuts: a sound-spelled Marathi word ("shing") asks for a check', tastyFill.nameUnsure);
+
+// ── Gemini as the source (phone merged it; the popup still applies the shop's pipeline) ──
+const geminiScan: ProductScanResult = {
+  ...scanBase, brand: 'Tasty Nuts', name_eng: 'Tasty Nuts Shing Bhujia', net_qty: '38 g', mrp: 10, barcode: null, mfg_date: null,
+  source: { name_eng: 'gemini', brand: 'gemini', net_qty: 'gemini', mrp: 'gemini' },
+  confidence: { name_eng: 0.55, brand: 0.9, net_qty: 0.55, mrp: 0.93 },
+  alternates: { name_eng: ['Tasty Sugar'], net_qty: ['20 g'] }, geminiStatus: 'ok',
+};
+const gFill = fillItemFromScan(blankNew, { isNew: true, touched: new Set() }, geminiScan, { ...maps, vocab });
+eq('Gemini full name → shop-style short name', gFill.item.name_eng, 'tasty nuts shing bhujia 38g');
+eq('Gemini MRP / size filled', [gFill.item.purchase_price, gFill.item.price, gFill.item.net_qty], [10, 10, '38 g']);
+eq('Marathi built from the short English name when Gemini gave none', gFill.item.name_marathi?.startsWith('टेस्टी नट्स'), true);
+const gMr = fillItemFromScan(blankNew, { isNew: true, touched: new Set() },
+  { ...geminiScan, name_marathi: 'टेस्टी नट्स शिंग भुजीया', source: { ...geminiScan.source, name_marathi: 'gemini' } }, { ...maps, vocab });
+eq("Gemini Marathi: the shop's spelling wins (भुजीया → भुजिया), size added", gMr.item.name_marathi, 'टेस्टी नट्स शिंग भुजिया ३८ ग्रॅम');
+check('Gemini Marathi always asks for a check', gMr.nameUnsure && gMr.filled.includes('name_marathi'));
+eq('shopSpellMarathi keeps unknown words and reports replacements',
+  shopSpellMarathi('शिंग भुजीया', { ...maps, vocab }), { text: 'शिंग भुजिया', replaced: [['भुजीया', 'भुजिया']] });
+const ocrMr = fillItemFromScan(blankNew, { isNew: true, touched: new Set() },
+  { ...geminiScan, name_marathi: 'शिंग भुजिया', source: { ...geminiScan.source, name_marathi: 'mlkit-ocr' } }, { ...maps, vocab });
+check('OCR Devanagari (not Gemini) still uses the English-first Marathi', ocrMr.item.name_marathi?.startsWith('टेस्टी नट्स') === true, ocrMr.item.name_marathi);
+const gDetails = formatScanDetails({ ...geminiScan, debug: {
+  gemini: { status: 'ok', model: 'gemini-3.5-flash-lite', ms: 2300, raw: '{"name_eng":"Tasty Nuts Shing Bhujia"}', problems: ['unknown key dropped: x'] },
+  ocrOnly: { name_eng: 'Tasty Sugar', brand: null, net_qty: '20 g', mrp: null },
+} });
+check('details: source per field, Gemini raw JSON, phone-only values, chips',
+  gDetails.includes('name_eng: Tasty Nuts Shing Bhujia · gemini') && gDetails.includes('raw JSON: {"name_eng":"Tasty Nuts Shing Bhujia"}')
+  && gDetails.includes('model: gemini-3.5-flash-lite · 2300 ms') && gDetails.includes('PHONE OCR ALONE') && gDetails.includes('name_eng: Tasty Sugar')
+  && gDetails.includes('dropped by checks: unknown key dropped: x'), gDetails);
+check('details: Gemini failure status shown', formatScanDetails({ ...scanBase, geminiStatus: 'daily_cap' }).includes('status: daily_cap'));
 // learned corrections: the user fixed a word once → fixed next time
 const learnedFix = learnSpellingFixes({}, 'parle-g glcuo biscuit 250g', 'parle-g gluco biscuit 250g');
 eq('spelling fix learned', learnedFix['!fix:glcuo'], 'gluco');

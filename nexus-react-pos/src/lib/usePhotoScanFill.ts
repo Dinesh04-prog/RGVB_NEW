@@ -10,7 +10,7 @@ import {
 } from './androidScan';
 import {
   buildInventoryWordMap, buildSpellVocab, findDuplicate, itemNameFields, learnDroppedWords, learnFromCorrection,
-  learnSpellingFixes, withItemNames, type NameMaps, type WordMap,
+  learnSpellingFixes, shortBilingualName, withItemNames, type NameMaps, type WordMap,
 } from './itemNames';
 import {
   fillItemFromScan, parsePickedBarcode, parsePickedName, parsePickedPrice, parsePickedQty, scanReadNothing,
@@ -132,6 +132,22 @@ export function usePhotoScanFill<T extends FillableItem>({ item, setItem, invent
     ? [result.mrp, ...mrpAlts.filter(v => v !== result.mrp)] : [];
   const qtyAlts = result?.alternates?.net_qty ?? [];
   const qtyOptions = result?.net_qty && qtyAlts.length ? [result.net_qty, ...qtyAlts.filter(v => v !== result.net_qty)] : [];
+  // Other names read (OCR / Open Food Facts / Gemini), shown in the same short shop style as the filled name
+  const nameAlts = result?.alternates?.name_eng ?? [];
+  const autoEng = s.autoNames?.name_eng || '';
+  const nameOptions = autoEng && nameAlts.length
+    ? [...new Set([autoEng, ...nameAlts.map(a =>
+        shortBilingualName({ brand: result?.brand, productEng: a, netQty: result?.net_qty }, maps).name_eng).filter(Boolean)])]
+    : [];
+  const geminiNote = (() => {
+    switch (result?.geminiStatus) {
+      case 'daily_cap': case 'quota': return "Gemini's daily limit is reached. Filled from the phone's reading only.";
+      case 'offline': return "Offline: Gemini was not used. Filled from the phone's reading only.";
+      case 'timeout': case 'error': case 'rate_limited': case 'unauthorized': case 'disabled':
+        return "Gemini could not read the photos this time. Filled from the phone's reading only.";
+      default: return '';
+    }
+  })();
 
   return {
     available: isAndroidScanAvailable(),
@@ -147,6 +163,15 @@ export function usePhotoScanFill<T extends FillableItem>({ item, setItem, invent
       : '',
     /** MRP values read (chosen first) when the photos disagreed; empty when there was only one */
     mrpOptions,
+    /** a short note when Gemini was not used or failed (the scan itself always continues) */
+    geminiNote,
+    /** English names read by the different readers (filled one first); empty when they agreed */
+    nameOptions,
+    chooseName: (value: string) => {
+      if (!item) return;
+      setItem(withItemNames(item, { eng: value }));   // the Marathi name is never touched
+      markTouched(['name_eng']);
+    },
     /** pack sizes read about equally well (chosen first); empty when there was only one */
     qtyOptions,
     chooseQty: (value: string) => {
@@ -177,8 +202,8 @@ export function usePhotoScanFill<T extends FillableItem>({ item, setItem, invent
 
     chooseMrp: setMrp,
 
-    /** Use an Open Food Facts suggestion. */
-    useSuggestion: (field: 'name_eng' | 'brand' | 'net_qty', value: string) => {
+    /** Use a suggestion (an unverified Gemini barcode, or an older result's Open Food Facts value). */
+    useSuggestion: (field: 'name_eng' | 'brand' | 'net_qty' | 'barcode', value: string) => {
       if (!item) return;
       if (field === 'name_eng') setItem(withItemNames(item, { eng: parsePickedName(value) ?? value }));
       else setItem({ ...item, [field]: value });

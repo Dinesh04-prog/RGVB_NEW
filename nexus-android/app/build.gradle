@@ -19,6 +19,16 @@ android {
         ndk {
             abiFilters 'arm64-v8a', 'armeabi-v7a'
         }
+
+        // "Fill from Photos" with Gemini: Worker URL and shared app key from the environment (GitHub secrets in CI).
+        // Empty (local builds, forks) = Gemini off; the phone's own reading is used. Never printed.
+        def env = { String k -> (System.getenv(k) ?: '').trim().replace('\\', '\\\\').replace('"', '\\"') }
+        buildConfigField 'String', 'GEMINI_WORKER_URL', "\"${env('GEMINI_WORKER_URL')}\""
+        buildConfigField 'String', 'GEMINI_APP_KEY', "\"${env('GEMINI_APP_KEY')}\""
+    }
+
+    buildFeatures {
+        buildConfig true
     }
 
     buildTypes {

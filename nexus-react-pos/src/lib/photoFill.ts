@@ -12,7 +12,8 @@
 
 import type { ProductScanResult } from './androidScan';
 import {
-  itemNameFields, makeSearchKey, normalizeEngName, shortBilingualName, spellFixEnglish, withItemNames, type NameMaps,
+  itemNameFields, makeSearchKey, normalizeEngName, shopSpellMarathi, shortBilingualName, spellFixEnglish, withItemNames,
+  type NameMaps,
 } from './itemNames';
 
 export interface FillableItem {
@@ -73,6 +74,13 @@ export const fillItemFromScan = <T extends FillableItem>(
     { brand: scan.brand, productEng, productDev: scan.name_marathi, netQty: scan.net_qty },
     maps,
   );
+  // Marathi printed on the pack and read by Gemini (≥ 0.8 sure): the shop's spellings override matching words,
+  // then the same short-name rules (filler dropped, whole words, size in Devanagari). Always yellow + "check".
+  const geminiMarathi = scan.source?.name_marathi === 'gemini' && scan.name_marathi?.trim()
+    ? shortBilingualName({ brand: scan.brand, productEng: null, productDev: shopSpellMarathi(scan.name_marathi, maps).text,
+        netQty: scan.net_qty }, maps).name_marathi
+    : '';
+  if (geminiMarathi) names.name_marathi = geminiMarathi;
 
   // Two separate name fields: each is filled only when it is empty; neither is derived from what the user typed
   const cur = itemNameFields(item);
@@ -120,7 +128,7 @@ export const fillItemFromScan = <T extends FillableItem>(
     autoNames: { name_eng: final.eng, name_marathi: final.marathi },
     // A Marathi word spelled by sound only (not from the shop's words or dictionaries) always needs a check
     nameUnsure: nameFilled && (names.unsure || (scan.confidence?.name_eng ?? 1) < 0.35 || !!spell?.unsure.length ||
-      (filled.includes('name_marathi') && names.mrPhonetic.length > 0)),
+      (filled.includes('name_marathi') && (geminiMarathi !== '' || names.mrPhonetic.length > 0))),
     spellChanges: spell?.changes ?? [],
   };
 };

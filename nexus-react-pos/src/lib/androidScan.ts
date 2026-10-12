@@ -30,8 +30,10 @@ export interface ProductScanResult {
   alternates?: { mrp?: number[]; net_qty?: string[]; name_eng?: string[] };
   /** short English messages for the popup ("check both dates", ignored prices) */
   warnings?: string[];
-  /** Open Food Facts values that disagree with a weak OCR read: offered, never filled */
-  suggestions?: Partial<Record<'name_eng' | 'brand' | 'net_qty', string>>;
+  /** values offered but never filled: a barcode only Gemini saw (unverified); older results: Open Food Facts values */
+  suggestions?: Partial<Record<'name_eng' | 'brand' | 'net_qty' | 'barcode', string>>;
+  /** ok | off | not_configured | offline | disabled | daily_cap | quota | rate_limited | timeout | unauthorized | error */
+  geminiStatus?: string;
   /** merged OCR lines of all photos, for "Recognised text" (tap a line to use it) */
   recognised?: { photo: number; text: string }[];
   debug?: ScanDebug;
@@ -55,6 +57,10 @@ export interface ScanDebug {
   pickedFrom?: Partial<Record<ScanField, number>>;
   /** every MRP value read, with its score and why */
   mrpReadings?: string[];
+  /** what the phone alone read, before Gemini / Open Food Facts */
+  ocrOnly?: { name_eng: string | null; brand: string | null; net_qty: string | null; mrp: number | null };
+  /** Gemini call: status, model, time, the model's JSON as returned, and what the Worker's checks dropped */
+  gemini?: { status: string; model: string | null; ms: number; raw: string | null; problems: string[] };
   openFoodFacts?: { name: string | null; brand: string | null; quantity: string | null } | null;
   timingsMs?: Record<string, number>;
 }
@@ -152,6 +158,17 @@ export const formatScanDetails = (r: ProductScanResult): string => {
       ...(r.mrp_alternates?.length ? [`alternates offered: ${r.mrp_alternates.map(v => `₹${v}`).join(', ')}`] : [])].join(NL)));
   }
   if (r.warnings?.length) out.push(block('WARNINGS', r.warnings.join(NL)));
+  const alt = r.alternates || {};
+  const altLines = (['name_eng', 'net_qty', 'mrp'] as const).filter(k => alt[k]?.length).map(k => `${k}: ${alt[k]!.join(' · ')}`);
+  if (altLines.length) out.push(block('ALTERNATES OFFERED AS CHIPS', altLines.join(NL)));
+  if (d.ocrOnly) {
+    const o = d.ocrOnly;
+    out.push(block('PHONE OCR ALONE', `name_eng: ${o.name_eng}${NL}brand: ${o.brand}${NL}net_qty: ${o.net_qty}${NL}mrp: ${o.mrp}`));
+  }
+  const g = d.gemini;
+  out.push(block('GEMINI', [`status: ${r.geminiStatus ?? g?.status ?? '-'}`,
+    ...(g ? [`model: ${g.model ?? '-'} · ${g.ms} ms`, ...(g.problems.length ? [`dropped by checks: ${g.problems.join('; ')}`] : []),
+      `raw JSON: ${g.raw ?? '(none)'}`] : [])].join(NL)));
   const off = d.openFoodFacts;
   const sug = Object.entries(r.suggestions || {});
   out.push(block('OPEN FOOD FACTS', [`status: ${r.offStatus}`,

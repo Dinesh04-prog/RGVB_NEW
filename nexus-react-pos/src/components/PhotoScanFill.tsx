@@ -46,6 +46,11 @@ export function PhotoScanNotices<T>({ scan, onOpenExisting }: { scan: PhotoScanF
           {scan.notice}
         </div>
       )}
+      {scan.geminiNote && (
+        <div style={{ background: LIGHT_BLUE, color: DARK_BLUE, padding: '8px 10px', borderRadius: 8, fontSize: '0.82rem', marginBottom: 8 }}>
+          {scan.geminiNote}
+        </div>
+      )}
       {scan.warnings.map(w => (
         <div key={w} style={{ background: SOFT_YELLOW, color: YELLOW_TEXT, border: '1px solid #EBD98A', padding: '8px 10px', borderRadius: 8, fontSize: '0.82rem', marginBottom: 8 }}>
           ⚠ {w}
@@ -97,19 +102,27 @@ export function MrpChoices({ scan, current }: { scan: PhotoScanFill; current: nu
     format={v => `₹${v}`} onChoose={scan.chooseMrp} />;
 }
 
+/** Other English names read (phone OCR, Open Food Facts, Gemini) under the English name: one tap switches. */
+export function NameChoices({ scan, current }: { scan: PhotoScanFill; current: string | undefined }) {
+  return <ValueChoices options={scan.nameOptions} current={current} label="Different names were read. Tap the right one:"
+    onChoose={scan.chooseName} />;
+}
+
 /** "38 g · 20 g" under the pack size when two sizes were read equally well. */
 export function QtyChoices({ scan, current }: { scan: PhotoScanFill; current: string | undefined }) {
   return <ValueChoices options={scan.qtyOptions} current={current} label="Different sizes were read. Tap the right one:"
     onChoose={scan.chooseQty} />;
 }
 
-/** An Open Food Facts value that disagrees with what the photo read: shown, used only on tap. */
-export function ScanSuggestion({ scan, field, label }: { scan: PhotoScanFill; field: 'name_eng' | 'brand' | 'net_qty'; label: string }) {
+/** A value that is offered but never filled (a barcode only Gemini saw; older results: Open Food Facts): used only on tap. */
+export function ScanSuggestion({ scan, field, label }: {
+  scan: PhotoScanFill; field: 'name_eng' | 'brand' | 'net_qty' | 'barcode'; label: string;
+}) {
   const value = scan.suggestions[field];
   if (!value) return null;
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 4, fontSize: '0.75rem', color: GREY }}>
-      <span>{label} (Open Food Facts):</span>
+      <span>{label}:</span>
       <button type="button" onClick={() => scan.useSuggestion(field, value)} style={chip}>{value}</button>
     </div>
   );

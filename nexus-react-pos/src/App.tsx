@@ -15,7 +15,7 @@ import type { CartItem, Receipt } from "./lib/db";
 import { translateHinglishToMarathi, transliterateDevanagariToLatin, normalizeForSearch, HINGLISH_TO_MARATHI, parseUserQuery, scoreCandidate } from "./lib/phonetic";
 import { itemNameFields, makeSearchKey, withItemNames } from "./lib/itemNames";
 import { usePhotoScanFill } from "./lib/usePhotoScanFill";
-import { PhotoScanButton, PhotoScanNotices, PhotoScanDebug, MrpChoices, QtyChoices, ScanSuggestion } from "./components/PhotoScanFill";
+import { PhotoScanButton, PhotoScanNotices, PhotoScanDebug, MrpChoices, NameChoices, QtyChoices, ScanSuggestion } from "./components/PhotoScanFill";
 
 interface InventoryItem {
   id: string;
@@ -3111,6 +3111,7 @@ export default function App() {
               onChange={(e) => { photoScan.edited('name_eng'); setInventoryEditItem(withItemNames(inventoryEditItem, { eng: e.target.value })); }}
               onKeyDown={editModalKeyDown}
             />
+            <NameChoices scan={photoScan} current={itemNameFields(inventoryEditItem).eng} />
             <ScanSuggestion scan={photoScan} field="name_eng" label="Suggested name" />
             <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#6c757d', marginBottom: '4px', marginTop: '10px', display: 'block' }}>ITEM NAME (MARATHI)</label>
             <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
@@ -3184,6 +3185,7 @@ export default function App() {
                 📷 Scan
               </button>
             </div>
+            <ScanSuggestion scan={photoScan} field="barcode" label="Barcode read by Gemini (not verified, check it)" />
 
             <div id="edit-barcode-scanner" style={{ display: 'none', position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.8)', zIndex: 5000, justifyContent: 'center', alignItems: 'center', flexDirection: 'column' }}>
                <div style={{ background: 'white', padding: '16px', borderRadius: '10px', width: '90%', maxWidth: '400px' }}>
