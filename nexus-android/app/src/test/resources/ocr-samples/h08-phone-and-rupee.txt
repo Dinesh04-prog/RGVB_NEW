@@ -1,0 +1,18 @@
+# held-out: price only with "Rs.", phone number on the next line
+id: h08-phone-and-rupee
+expect.mrp: 25
+expect.weight: 35 g
+expect.mfg: -
+expect.exp: -
+expect.brand: Bingo
+expect.name: mad angles
+expect.barcode: -
+== photo
+-- latin
+40|Bingo!
+26|Mad Angles
+== photo
+-- latin
+Rs. 25/-
+Ph: 022 2345 6789
+Net Wt 35 g

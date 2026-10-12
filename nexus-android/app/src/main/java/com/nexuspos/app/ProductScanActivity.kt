@@ -4,12 +4,15 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.os.SystemClock
 import android.util.Log
 import android.util.Size
 import android.view.Gravity
@@ -32,6 +35,7 @@ import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
+import androidx.camera.core.SurfaceOrientedMeteringPointFactory
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -46,6 +50,9 @@ import java.util.concurrent.TimeUnit
  * Take 1–5 photos of one pack (front, back, side, crimp…), then "Done" → ScanPipeline on a background
  * thread → result JSON written to [resultFile] → RESULT_OK. Photos never leave this screen.
  *
+ * Each capture focuses first (unless the user just tapped to focus), and each photo is checked for blur,
+ * darkness and glare; a problem is shown on the preview with "Retake" as the main button.
+ *
  * Survives being destroyed (low memory / process death): photos live in cacheDir, the photo count and step
  * are saved in onSaveInstanceState, and the result goes to a file that MainActivity / the web app pick up.
  */
@@ -58,17 +65,31 @@ class ProductScanActivity : AppCompatActivity() {
         private const val STATE_STEP = "step"
         private const val STATE_COUNT = "count"
         private const val STATE_TORCH = "torch"
+        private const val STATE_ISSUES = "issues"
+        private const val FOCUS_TIMEOUT_MS = 1500L
+        private const val TAP_FOCUS_VALID_MS = 3000L
+
+        // App theme (nexus-react-pos App.tsx): primary blue, light blue, dark blue, green, grey
+        private const val BLUE = 0xFF0D6EFD.toInt()
+        private const val LIGHT_BLUE = 0xFFE7F1FF.toInt()
+        private const val DARK_BLUE = 0xFF0A3D62.toInt()
+        private const val GREEN = 0xFF16A34A.toInt()
+        private const val GREY = 0xFF6C757D.toInt()
+        private const val WARN_BG = 0xFFFFF9DB.toInt()
+        private const val WARN_TEXT = 0xFF7A5D00.toInt()
 
         fun resultFile(ctx: Context) = File(ctx.filesDir, "scan_result.json")
         private fun photoFile(ctx: Context, n: Int) = File(ctx.cacheDir, "scan_photo_$n.jpg")
         private fun clearPhotos(ctx: Context) = (1..MAX_PHOTOS).forEach { photoFile(ctx, it).delete() }
     }
 
-    private enum class Step { CAMERA, PREVIEW, PROCESSING }
+    private enum class Step { CAMERA, CHECKING, PREVIEW, PROCESSING }
 
     private var step = Step.CAMERA
     private var count = 0          // photos taken and kept
     private var torchOn = false
+    private var issues: List<ImageQuality.Issue> = emptyList()   // of the last photo
+    private var lastTapFocus = 0L
     private var camera: Camera? = null
     private var imageCapture: ImageCapture? = null
     private var cameraProvider: ProcessCameraProvider? = null
@@ -84,8 +105,10 @@ class ProductScanActivity : AppCompatActivity() {
     private lateinit var captureBtn: Button
     private lateinit var torchBtn: Button
     private lateinit var doneBtnCamera: Button
+    private lateinit var retakeBtn: Button
     private lateinit var addAnotherBtn: Button
     private lateinit var progress: LinearLayout
+    private lateinit var progressText: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -96,6 +119,9 @@ class ProductScanActivity : AppCompatActivity() {
             step = Step.valueOf(savedInstanceState.getString(STATE_STEP) ?: Step.CAMERA.name)
             count = savedInstanceState.getInt(STATE_COUNT)
             torchOn = savedInstanceState.getBoolean(STATE_TORCH)
+            issues = savedInstanceState.getStringArrayList(STATE_ISSUES).orEmpty()
+                .mapNotNull { n -> ImageQuality.Issue.values().firstOrNull { it.name == n } }
+            if (step == Step.CHECKING) step = Step.PREVIEW   // the check was lost with the old Activity
         }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() = handleBack()
@@ -119,6 +145,7 @@ class ProductScanActivity : AppCompatActivity() {
         outState.putString(STATE_STEP, step.name)
         outState.putInt(STATE_COUNT, count)
         outState.putBoolean(STATE_TORCH, torchOn)
+        outState.putStringArrayList(STATE_ISSUES, ArrayList(issues.map { it.name }))
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
@@ -147,10 +174,10 @@ class ProductScanActivity : AppCompatActivity() {
                 val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
                 val capture = ImageCapture.Builder()
                     .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
-                    // ~5 MP is plenty for OCR and keeps memory low on cheap phones
+                    // ~12 MP: small inkjet print stays readable. Bigger sensors are subsampled when decoding for OCR.
                     .setResolutionSelector(ResolutionSelector.Builder()
-                        .setResolutionStrategy(ResolutionStrategy(Size(2592, 1944),
-                            ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER))
+                        .setResolutionStrategy(ResolutionStrategy(Size(4000, 3000),
+                            ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER))
                         .build())
                     .build()
                 provider.unbindAll()
@@ -168,25 +195,58 @@ class ProductScanActivity : AppCompatActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
+    /** Focus on the middle of the frame first (unless the user just tapped to focus), then take the photo. */
     private fun capture() {
         val ic = imageCapture ?: return
-        if (count >= MAX_PHOTOS) return
-        val file = photoFile(this, count + 1)
+        val cam = camera ?: return
+        if (count >= MAX_PHOTOS || step != Step.CAMERA) return
         captureBtn.isEnabled = false
+        hint.text = "Focusing… hold steady."
+        if (SystemClock.elapsedRealtime() - lastTapFocus < TAP_FOCUS_VALID_MS) { takePicture(ic); return }
+        var taken = false
+        val shoot = { if (!taken) { taken = true; takePicture(ic) } }
+        val point = SurfaceOrientedMeteringPointFactory(1f, 1f).createPoint(0.5f, 0.47f)
+        val focus = cam.cameraControl.startFocusAndMetering(
+            FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
+                .setAutoCancelDuration(3, TimeUnit.SECONDS)
+                .build()
+        )
+        focus.addListener({ shoot() }, ContextCompat.getMainExecutor(this))
+        previewView.postDelayed({ shoot() }, FOCUS_TIMEOUT_MS)   // no autofocus / slow focus: take it anyway
+    }
+
+    private fun takePicture(ic: ImageCapture) {
+        val file = photoFile(this, count + 1)
         ic.takePicture(ImageCapture.OutputFileOptions.Builder(file).build(), ContextCompat.getMainExecutor(this),
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
                     captureBtn.isEnabled = true
                     count++
-                    step = Step.PREVIEW
-                    render()
+                    checkPhoto(file)
                 }
                 override fun onError(e: ImageCaptureException) {
                     captureBtn.isEnabled = true
                     Log.e(TAG, "Capture failed", e)
                     Toast.makeText(this@ProductScanActivity, "Photo failed, try again", Toast.LENGTH_SHORT).show()
+                    render()
                 }
             })
+    }
+
+    /** Blur / dark / glare check on the worker thread, then the preview. */
+    private fun checkPhoto(file: File) {
+        step = Step.CHECKING
+        issues = emptyList()
+        render()
+        worker.execute {
+            val report = try { ScanPipeline.checkQuality(file) } catch (t: Throwable) { null }
+            runOnUiThread {
+                if (isFinishing || isDestroyed || step != Step.CHECKING) return@runOnUiThread
+                issues = report?.issues.orEmpty()
+                step = Step.PREVIEW
+                render()
+            }
+        }
     }
 
     private fun focusAt(x: Float, y: Float) {
@@ -197,6 +257,7 @@ class ProductScanActivity : AppCompatActivity() {
                 .setAutoCancelDuration(3, TimeUnit.SECONDS)
                 .build()
         )
+        lastTapFocus = SystemClock.elapsedRealtime()
         guide.showFocus(x, y)
     }
 
@@ -206,34 +267,56 @@ class ProductScanActivity : AppCompatActivity() {
         updateTorchLabel()
     }
 
-    private fun updateTorchLabel() { torchBtn.text = if (torchOn) "🔦 बंद" else "🔦 चालू" }
+    private fun updateTorchLabel() { torchBtn.text = if (torchOn) "🔦 Torch off" else "🔦 Torch on" }
 
     // ── Steps ────────────────────────────────────────────────────────────────
 
     private fun render() {
         val previewing = step == Step.PREVIEW
-        cameraBar.visibility = if (previewing) View.GONE else View.VISIBLE
+        val checking = step == Step.CHECKING
+        cameraBar.visibility = if (step == Step.CAMERA) View.VISIBLE else View.GONE
         previewBar.visibility = if (previewing) View.VISIBLE else View.GONE
-        guide.visibility = if (previewing) View.GONE else View.VISIBLE
+        guide.visibility = if (step == Step.CAMERA) View.VISIBLE else View.GONE
         photoView.visibility = if (previewing) View.VISIBLE else View.GONE
-        progress.visibility = View.GONE
+        progress.visibility = if (checking) View.VISIBLE else View.GONE
         doneBtnCamera.visibility = if (count > 0) View.VISIBLE else View.GONE
         addAnotherBtn.visibility = if (count < MAX_PHOTOS) View.VISIBLE else View.GONE
-        if (previewing) {
-            title.text = "फोटो $count/$MAX_PHOTOS ठीक आहे? अक्षरे स्पष्ट दिसत आहेत?"
-            hint.text = if (count < MAX_PHOTOS) "बाजू, मागचा भाग, तारीख यांचे आणखी फोटो घेऊ शकता." else "जास्तीत जास्त $MAX_PHOTOS फोटो झाले."
-            photoView.setImageBitmap(ScanPipeline.loadBitmap(photoFile(this, count), 1280))
-        } else {
-            title.text = "फोटो ${count + 1}/$MAX_PHOTOS"
-            hint.text = when (count) {
-                0 -> "समोरचा भाग (नाव, ब्रँड) चौकटीत घ्या."
-                else -> "मागचा भाग: बारकोड, MRP, वजन, तारीख. चमक येत असल्यास पाकीट थोडे तिरके धरा. अक्षरांवर टॅप करून फोकस करा."
+        // A problem with the photo makes "Retake" the main button
+        styleButton(retakeBtn, if (issues.isEmpty()) Style.SECONDARY else Style.PRIMARY)
+        styleButton(addAnotherBtn, if (issues.isEmpty()) Style.PRIMARY else Style.SECONDARY)
+        hint.setTextColor(GREY)
+        hint.setBackgroundColor(Color.TRANSPARENT)
+        when (step) {
+            Step.CHECKING -> {
+                title.text = "Photo $count/$MAX_PHOTOS"
+                hint.text = ""
+                progressText.text = "Checking the photo…"
+            }
+            Step.PREVIEW -> {
+                if (issues.isEmpty()) {
+                    title.text = "Photo $count/$MAX_PHOTOS: is the text sharp and readable?"
+                    hint.text = if (count < MAX_PHOTOS) "You can add photos of the back, side and dates." else "That is the maximum of $MAX_PHOTOS photos."
+                } else {
+                    title.text = "Photo $count/$MAX_PHOTOS may be hard to read"
+                    hint.text = issues.joinToString("\n") { it.message } + "\nTap Retake, or keep it if the text looks fine."
+                    hint.setTextColor(WARN_TEXT)
+                    hint.setBackgroundColor(WARN_BG)
+                }
+                photoView.setImageBitmap(ScanPipeline.loadBitmap(photoFile(this, count), 1280))
+            }
+            else -> {
+                title.text = "Photo ${count + 1}/$MAX_PHOTOS"
+                hint.text = when (count) {
+                    0 -> "Front of the pack (name, brand) inside the frame."
+                    else -> "Back or side: barcode, MRP, weight, dates. Tilt the pack if there is glare. Tap the text to focus."
+                }
             }
         }
     }
 
     private fun addAnother() {
         photoView.setImageDrawable(null)
+        issues = emptyList()
         step = Step.CAMERA
         render()
     }
@@ -241,6 +324,7 @@ class ProductScanActivity : AppCompatActivity() {
     private fun retakeLast() {
         if (count > 0) { photoFile(this, count).delete(); count-- }
         photoView.setImageDrawable(null)
+        issues = emptyList()
         step = Step.CAMERA
         render()
     }
@@ -249,7 +333,7 @@ class ProductScanActivity : AppCompatActivity() {
         when (step) {
             Step.PREVIEW -> addAnother()      // keep the photo, back to the camera
             Step.CAMERA -> finishCancelled()
-            Step.PROCESSING -> {}             // wait for the result
+            Step.CHECKING, Step.PROCESSING -> {}   // wait
         }
     }
 
@@ -261,8 +345,9 @@ class ProductScanActivity : AppCompatActivity() {
         guide.visibility = View.GONE
         photoView.visibility = View.GONE
         progress.visibility = View.VISIBLE
-        title.text = "$count फोटोंमधून माहिती वाचत आहे…"
+        title.text = if (count == 1) "Reading 1 photo…" else "Reading $count photos…"
         hint.text = ""
+        progressText.text = "Reading barcode, name, MRP, weight and dates…"
         camera?.cameraControl?.enableTorch(false)
         cameraProvider?.unbindAll()
 
@@ -299,21 +384,44 @@ class ProductScanActivity : AppCompatActivity() {
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
-    private fun bigButton(text: String, color: Int, onClick: () -> Unit) = Button(this).apply {
+    private enum class Style { PRIMARY, SECONDARY, SUCCESS }
+
+    private fun styleButton(b: Button, style: Style) {
+        val (bg, fg) = when (style) {
+            Style.PRIMARY -> BLUE to Color.WHITE
+            Style.SUCCESS -> GREEN to Color.WHITE
+            Style.SECONDARY -> Color.WHITE to BLUE
+        }
+        b.background = GradientDrawable().apply {
+            cornerRadius = dp(10).toFloat()
+            setColor(bg)
+            if (style == Style.SECONDARY) setStroke(dp(2), BLUE)
+        }
+        b.setTextColor(fg)
+    }
+
+    private fun bigButton(text: String, style: Style, onClick: () -> Unit) = Button(this).apply {
         this.text = text
         textSize = 16f
-        setTextColor(Color.WHITE)
-        setBackgroundColor(color)
-        minHeight = dp(60)
+        minHeight = dp(56)
         isAllCaps = false
+        stateListAnimator = null
+        styleButton(this, style)
         setOnClickListener { onClick() }
     }
 
     private fun weighted(w: Float) = LinearLayout.LayoutParams(0, WRAP_CONTENT, w).apply { setMargins(dp(4), 0, dp(4), 0) }
 
+    private fun bar() = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        setPadding(dp(10), dp(10), dp(10), dp(16))
+        setBackgroundColor(Color.WHITE)
+        elevation = dp(4).toFloat()
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     private fun buildUi() {
-        val root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
+        val root = FrameLayout(this).apply { setBackgroundColor(Color.WHITE) }
 
         previewView = PreviewView(this).apply {
             scaleType = PreviewView.ScaleType.FILL_CENTER
@@ -329,78 +437,68 @@ class ProductScanActivity : AppCompatActivity() {
 
         photoView = ImageView(this).apply {
             scaleType = ImageView.ScaleType.FIT_CENTER
-            setBackgroundColor(Color.BLACK)
+            setBackgroundColor(Color.WHITE)
             visibility = View.GONE
         }
         root.addView(photoView, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
 
         val top = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(0x99000000.toInt())
+            setBackgroundColor(Color.WHITE)
+            elevation = dp(4).toFloat()
             setPadding(dp(16), dp(14), dp(16), dp(10))
         }
-        title = TextView(this).apply { setTextColor(Color.WHITE); textSize = 18f }
-        hint = TextView(this).apply { setTextColor(0xFFFDE68A.toInt()); textSize = 14f }
+        title = TextView(this).apply { setTextColor(DARK_BLUE); textSize = 18f; setTypeface(typeface, android.graphics.Typeface.BOLD) }
+        hint = TextView(this).apply { setTextColor(GREY); textSize = 14f; setPadding(0, dp(4), 0, dp(4)) }
         top.addView(title); top.addView(hint)
         root.addView(top, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.TOP))
 
-        val blue = 0xFF0A3D62.toInt()
-        val green = 0xFF16A34A.toInt()
-        val grey = 0xFF4B5563.toInt()
-        val orange = 0xFFF97316.toInt()
-
-        cameraBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(10), dp(10), dp(10), dp(16))
-            setBackgroundColor(0x99000000.toInt())
-        }
-        torchBtn = bigButton("🔦 चालू", grey) { toggleTorch() }
-        captureBtn = bigButton("📸 फोटो घ्या", orange) { capture() }
-        doneBtnCamera = bigButton("✓ झाले", green) { startProcessing() }
-        cameraBar.addView(torchBtn, weighted(1f))
+        cameraBar = bar()
+        torchBtn = bigButton("🔦 Torch on", Style.SECONDARY) { toggleTorch() }
+        captureBtn = bigButton("📸 Take photo", Style.PRIMARY) { capture() }
+        doneBtnCamera = bigButton("✓ Done", Style.SUCCESS) { startProcessing() }
+        cameraBar.addView(torchBtn, weighted(1.1f))
         cameraBar.addView(captureBtn, weighted(1.6f))
         cameraBar.addView(doneBtnCamera, weighted(1f))
         root.addView(cameraBar, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.BOTTOM))
 
-        previewBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(10), dp(10), dp(10), dp(16))
-            setBackgroundColor(0x99000000.toInt())
-            visibility = View.GONE
-        }
-        addAnotherBtn = bigButton("+ आणखी फोटो", blue) { addAnother() }
-        previewBar.addView(bigButton("↺ पुन्हा घ्या", grey) { retakeLast() }, weighted(1f))
-        previewBar.addView(addAnotherBtn, weighted(1.2f))
-        previewBar.addView(bigButton("✓ झाले", green) { startProcessing() }, weighted(1f))
+        previewBar = bar().apply { visibility = View.GONE }
+        retakeBtn = bigButton("↺ Retake", Style.SECONDARY) { retakeLast() }
+        addAnotherBtn = bigButton("+ Add another photo", Style.PRIMARY) { addAnother() }
+        previewBar.addView(retakeBtn, weighted(1f))
+        previewBar.addView(addAnotherBtn, weighted(1.3f))
+        previewBar.addView(bigButton("✓ Done", Style.SUCCESS) { startProcessing() }, weighted(1f))
         root.addView(previewBar, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.BOTTOM))
 
+        progressText = TextView(this).apply {
+            setTextColor(DARK_BLUE)
+            textSize = 16f
+            gravity = Gravity.CENTER
+            setPadding(dp(24), dp(12), dp(24), 0)
+        }
         progress = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            setBackgroundColor(0xCC000000.toInt())
+            setBackgroundColor(Color.WHITE)
             visibility = View.GONE
             isClickable = true
-            addView(ProgressBar(this@ProductScanActivity))
-            addView(TextView(this@ProductScanActivity).apply {
-                text = "बारकोड, MRP, तारीख वाचत आहे…"
-                setTextColor(Color.WHITE)
-                textSize = 16f
-                setPadding(0, dp(12), 0, 0)
-            })
+            addView(ProgressBar(this@ProductScanActivity).apply { indeterminateTintList = ColorStateList.valueOf(BLUE) })
+            addView(progressText)
         }
         root.addView(progress, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        top.bringToFront()
 
         setContentView(root)
     }
 
     /** Dims everything outside the guide frame and shows a ring where the user tapped to focus. */
     private class GuideOverlay(ctx: Context) : View(ctx) {
-        private val dim = Paint().apply { color = 0x88000000.toInt() }
+        private val dim = Paint().apply { color = 0x66000000 }
         private val frame = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE; style = Paint.Style.STROKE; strokeWidth = 6f
         }
         private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0xFFFDE68A.toInt(); style = Paint.Style.STROKE; strokeWidth = 5f
+            color = LIGHT_BLUE; style = Paint.Style.STROKE; strokeWidth = 6f
         }
         private var focusX = -1f
         private var focusY = -1f

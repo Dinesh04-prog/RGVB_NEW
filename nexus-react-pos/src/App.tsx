@@ -13,9 +13,9 @@ import html2canvas from 'html2canvas';
 import { saveSale, getSalesHistory } from "./lib/db";
 import type { CartItem, Receipt } from "./lib/db";
 import { translateHinglishToMarathi, transliterateDevanagariToLatin, normalizeForSearch, HINGLISH_TO_MARATHI, parseUserQuery, scoreCandidate } from "./lib/phonetic";
-import { makeSearchKey } from "./lib/itemNames";
+import { itemNameFields, makeSearchKey, withItemNames } from "./lib/itemNames";
 import { usePhotoScanFill } from "./lib/usePhotoScanFill";
-import { PhotoScanButton, PhotoScanNotices, PhotoScanDebug } from "./components/PhotoScanFill";
+import { PhotoScanButton, PhotoScanNotices, PhotoScanDebug, MrpChoices, ScanSuggestion } from "./components/PhotoScanFill";
 
 interface InventoryItem {
   id: string;
@@ -87,6 +87,8 @@ export default function App() {
   const [xlsxFileName, setXlsxFileName] = useState<string>("");
   const [uploadStatus, setUploadStatus] = useState<string>("");
   const [isEditVoiceActive, setIsEditVoiceActive] = useState(false);
+  // Save was tried on this popup item with both names empty
+  const [editNameErrorFor, setEditNameErrorFor] = useState<string | null>(null);
   const [newRateUnit, setNewRateUnit] = useState("");
   const [newRateValue, setNewRateValue] = useState("");
 
@@ -547,7 +549,10 @@ export default function App() {
 
   const saveInventoryEdit = async () => {
     if (!inventoryEditItem) return;
-    let item = inventoryEditItem;
+    // Two separate name fields; at least one is needed. `name` = Marathi if present, otherwise English.
+    const names = itemNameFields(inventoryEditItem);
+    if (!names.eng.trim() && !names.marathi.trim()) { setEditNameErrorFor(inventoryEditItem.id); return; }
+    let item = withItemNames(inventoryEditItem, { eng: names.eng.trim(), marathi: names.marathi.trim() });
     // New items get the shop's short code (4 Latin + 4 Devanagari chars) if none was set
     if (!item.search_key && !inventory.some(i => i.id === item.id)) {
       const mr = item.name_marathi || item.name || '';
@@ -679,19 +684,6 @@ export default function App() {
       });
     };
     recognition.start();
-  };
-
-  const toggleEditNameLanguage = () => {
-    if (!inventoryEditItem) return;
-    const current = inventoryEditItem.name_marathi || inventoryEditItem.name || '';
-    const hasDevanagari = /[ऀ-ॿ]/.test(current);
-    if (hasDevanagari) {
-      const latin = transliterateDevanagariToLatin(current);
-      setInventoryEditItem({ ...inventoryEditItem, name_marathi: latin, name: latin });
-    } else {
-      const marathi = translateHinglishToMarathi(current);
-      setInventoryEditItem({ ...inventoryEditItem, name_marathi: marathi, name: marathi });
-    }
   };
 
   const loadReceiptToCart = (receipt: Receipt) => {
@@ -3089,14 +3081,46 @@ export default function App() {
             
             <PhotoScanButton scan={photoScan} />
             <PhotoScanNotices scan={photoScan} onOpenExisting={setInventoryEditItem} />
-            <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#6c757d', marginBottom: '4px', display: 'block' }}>NAME (MARATHI / ENG)</label>
+            {/* Two separate names: editing one never changes the other. name = Marathi if present, otherwise English. */}
+            {(() => {
+              const names = itemNameFields(inventoryEditItem);
+              const noEng = !names.eng.trim();
+              const noMr = !names.marathi.trim();
+              return (
+                <div style={{ marginBottom: '4px' }}>
+                  {editNameErrorFor === inventoryEditItem.id && noEng && noMr && (
+                    <div style={{ background: '#FEE2E2', color: '#991B1B', padding: '6px 10px', borderRadius: 6, fontSize: '0.8rem', marginBottom: 8 }}>
+                      Enter an item name (English or Marathi) before saving.
+                    </div>
+                  )}
+                  {noEng !== noMr && (
+                    <div style={{ background: '#FFF9DB', color: '#7A5D00', border: '1px solid #EBD98A', padding: '6px 10px', borderRadius: 6, fontSize: '0.78rem', marginBottom: 8 }}>
+                      {noEng ? 'English name is empty.' : 'Marathi name is empty.'} You can still save.
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+            <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#6c757d', marginBottom: '4px', display: 'block' }}>ITEM NAME (ENGLISH)</label>
+            <input
+              type="text"
+              className="edit-input"
+              style={photoScan.hl('name_eng')}
+              placeholder="e.g. parle-g biscuit 250g"
+              value={itemNameFields(inventoryEditItem).eng}
+              onChange={(e) => { photoScan.edited('name_eng'); setInventoryEditItem(withItemNames(inventoryEditItem, { eng: e.target.value })); }}
+              onKeyDown={editModalKeyDown}
+            />
+            <ScanSuggestion scan={photoScan} field="name_eng" label="Suggested name" />
+            <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#6c757d', marginBottom: '4px', marginTop: '10px', display: 'block' }}>ITEM NAME (MARATHI)</label>
             <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
               <input
                 type="text"
                 className="edit-input"
-                style={{ flex: 1, ...photoScan.hl('name') }}
-                value={inventoryEditItem.name_marathi || inventoryEditItem.name}
-                onChange={(e) => { photoScan.edited('name'); setInventoryEditItem({ ...inventoryEditItem, name_marathi: e.target.value, name: e.target.value }); }}
+                style={{ flex: 1, fontFamily: '"Noto Sans Devanagari", sans-serif', ...photoScan.hl('name_marathi') }}
+                placeholder="Marathi name (Devanagari)"
+                value={itemNameFields(inventoryEditItem).marathi}
+                onChange={(e) => { photoScan.edited('name_marathi'); setInventoryEditItem(withItemNames(inventoryEditItem, { marathi: e.target.value })); }}
                 onKeyDown={editModalKeyDown}
               />
               <button
@@ -3110,18 +3134,6 @@ export default function App() {
                   animation: isEditVoiceActive ? 'pulse 1.5s infinite' : 'none',
                 }}
               >🎙</button>
-              <button
-                type="button"
-                onClick={toggleEditNameLanguage}
-                title={/[ऀ-ॿ]/.test(inventoryEditItem.name_marathi || inventoryEditItem.name || '') ? 'Convert to English' : 'Convert to Marathi'}
-                style={{
-                  flexShrink: 0, width: 40, height: 40, borderRadius: 8, border: '1px solid #ccc',
-                  background: '#f8f9fa', color: '#0a3d62', fontSize: '1rem',
-                  fontWeight: 'bold', cursor: 'pointer', fontFamily: '"Noto Sans Devanagari", sans-serif',
-                }}
-              >
-                {/[ऀ-ॿ]/.test(inventoryEditItem.name_marathi || inventoryEditItem.name || '') ? 'A' : 'अ'}
-              </button>
             </div>
 
             <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#6c757d', marginBottom: '2px', marginTop: '10px', display: 'block' }}>BARCODE (Optional)</label>
@@ -3193,6 +3205,7 @@ export default function App() {
                   onChange={(e) => { photoScan.edited('purchase_price'); setInventoryEditItem({ ...inventoryEditItem, purchase_price: Number(e.target.value) }); }}
                   onKeyDown={editModalKeyDown}
                 />
+                <MrpChoices scan={photoScan} current={inventoryEditItem.purchase_price} />
               </div>
               <div style={{ flex: 1 }}>
                 <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#6c757d', marginBottom: '2px', display: 'block' }}>SALE RATE</label>
@@ -3232,6 +3245,22 @@ export default function App() {
                 />
               </div>
             </div>
+
+            {/* Pack size from the photos (net_qty); only shown once it has a value or after a scan */}
+            {(inventoryEditItem.net_qty || photoScan.debugText) && (
+              <div style={{ marginTop: '10px' }}>
+                <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#6c757d', marginBottom: '2px', display: 'block' }}>PACK SIZE (e.g. 250 g, 1 L)</label>
+                <input
+                  type="text"
+                  className="edit-input"
+                  style={photoScan.hl('net_qty')}
+                  value={inventoryEditItem.net_qty || ''}
+                  onChange={(e) => { photoScan.edited('net_qty'); setInventoryEditItem({ ...inventoryEditItem, net_qty: e.target.value }); }}
+                  onKeyDown={editModalKeyDown}
+                />
+                <ScanSuggestion scan={photoScan} field="net_qty" label="Suggested size" />
+              </div>
+            )}
 
             {/* Unit Rates */}
             <div style={{ marginTop: '14px' }}>

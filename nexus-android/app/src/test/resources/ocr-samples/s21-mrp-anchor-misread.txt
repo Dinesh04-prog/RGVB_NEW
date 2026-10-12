@@ -1,0 +1,18 @@
+# "MRP" read as "MRF" and no currency symbol on the line
+id: s21-mrp-anchor-misread
+expect.mrp: 99
+expect.weight: 100 g
+expect.mfg: 2026-01-01
+expect.exp: 2027-06-30
+expect.brand: Himalaya
+expect.name: neem face wash
+expect.barcode: -
+== photo
+-- latin
+40|Himalaya
+26|Purifying Neem Face Wash
+== photo
+-- latin
+MRF: 99.00 (incl. of all taxes)
+Net Wt. 100 g
+MFG 01/2026  EXP 06/2027

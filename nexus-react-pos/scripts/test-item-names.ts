@@ -5,10 +5,13 @@ import {
   makeSearchKey, qtyEng, qtyMarathi, buildInventoryWordMap, composeNames,
   learnFromCorrection, findDuplicate, marathiToEnglish, englishToMarathi, buildPhotoItem,
   normalizeEngName, normalizeMarathiName, shortBilingualName, printedLength, learnDroppedWords, SHORT_NAME_LIMITS,
+  itemNameFields, withItemNames, buildSpellVocab, spellFixEnglish, spellFixWord, osaDistance, learnSpellingFixes,
   type NameMaps,
 } from '../src/lib/itemNames';
 import { formatScanDetails, type ProductScanResult } from '../src/lib/androidScan';
-import { fillItemFromScan, scanReadNothing } from '../src/lib/photoFill';
+import {
+  fillItemFromScan, scanReadNothing, parsePickedPrice, parsePickedQty, parsePickedBarcode, parsePickedName, fixDigits,
+} from '../src/lib/photoFill';
 
 let failures = 0;
 const check = (label: string, cond: boolean, detail = '') => {
@@ -209,7 +212,7 @@ const scanFull: ProductScanResult = { ...scanBase, expiry_date: '2026-07-12' };
 const f1 = fillItemFromScan(blankNew, { isNew: true, touched: new Set() }, scanFull, maps);
 eq('new: Marathi name filled (short, shop style)', f1.item.name_marathi, 'पारले-जी ग्लुको बिस्किट २५० ग्रॅम');
 eq('new: name = name_marathi', f1.item.name, f1.item.name_marathi);
-eq('new: English name (hidden) filled, short', f1.item.name_eng, 'parle-g gluco biscuit 250g');
+eq('new: English name filled, short', f1.item.name_eng, 'parle-g gluco biscuit 250g');
 eq('new: full pack name kept', f1.item.full_name_eng, 'parle-g original gluco biscuits 250g');
 eq('new: brand / barcode / net_qty', [f1.item.brand, f1.item.barcode, f1.item.net_qty], ['Parle-G', '8901719101038', '250 g']);
 eq('new: MRP → purchase_price, sale rate defaults to MRP', [f1.item.purchase_price, f1.item.price], [10, 10]);
@@ -217,20 +220,30 @@ eq('new: default unit kg → pcs', f1.item.unit, 'pcs');
 eq('new: dates', [f1.item.mfg_date, f1.item.expiry_date], ['2026-01-12', '2026-07-12']);
 eq('new: stock never filled', f1.item.stock_quantity, 0);
 check('new: search_key left to the normal save', !('search_key' in f1.item) || !f1.item.search_key);
-check('new: filled list', ['name', 'name_eng', 'barcode', 'purchase_price', 'price', 'unit'].every(k => f1.filled.includes(k as never)));
+check('new: filled list', ['name_marathi', 'name_eng', 'barcode', 'purchase_price', 'price', 'unit'].every(k => f1.filled.includes(k as never)));
 
+// Two separate name fields: each is filled only when it is empty; a saved name is never changed
 const existing = { id: 'GVB-099', name: 'पारले बिस्किट', name_marathi: 'पारले बिस्किट', name_eng: '', unit: 'pcs', price: 9, purchase_price: 0, barcode: '', search_key: '' };
 const f2 = fillItemFromScan(existing, { isNew: false, touched: new Set() }, scanFull, maps);
-eq('edit: saved name kept', [f2.item.name, f2.item.name_marathi], ['पारले बिस्किट', 'पारले बिस्किट']);
-eq('edit: English name not added next to a saved name', f2.item.name_eng, '');
+eq('edit: saved Marathi name kept', [f2.item.name, f2.item.name_marathi], ['पारले बिस्किट', 'पारले बिस्किट']);
+eq('edit: empty English field filled on its own', f2.item.name_eng, 'parle-g gluco biscuit 250g');
 eq('edit: saved sale rate kept', f2.item.price, 9);
 eq('edit: empty MRP / barcode filled', [f2.item.purchase_price, f2.item.barcode], [10, '8901719101038']);
 eq('edit: unit kept', f2.item.unit, 'pcs');
-check('edit: name/price not in filled', !f2.filled.includes('name') && !f2.filled.includes('price'));
+check('edit: Marathi name / price not in filled', !f2.filled.includes('name_marathi') && !f2.filled.includes('price') && f2.filled.includes('name_eng'));
+const bothSaved = { ...existing, name_eng: 'parle biscuit' };
+const f2b = fillItemFromScan(bothSaved, { isNew: false, touched: new Set() }, scanFull, maps);
+eq('edit: both saved names kept', [f2b.item.name_eng, f2b.item.name_marathi, f2b.item.name], ['parle biscuit', 'पारले बिस्किट', 'पारले बिस्किट']);
+const engOnly = { ...blankNew, id: 'GVB-100', name: 'sugar', name_eng: 'sugar' };
+const f2c = fillItemFromScan(engOnly, { isNew: false, touched: new Set() }, scanFull, maps);
+eq('edit: English-only item keeps English, gets Marathi, name becomes Marathi',
+  [f2c.item.name_eng, f2c.item.name_marathi, f2c.item.name], ['sugar', 'पारले-जी ग्लुको बिस्किट २५० ग्रॅम', 'पारले-जी ग्लुको बिस्किट २५० ग्रॅम']);
 
 const typed = { ...blankNew, name: 'साखर', name_marathi: 'साखर', barcode: '123' };
-const f3 = fillItemFromScan(typed, { isNew: true, touched: new Set(['name', 'barcode', 'unit']) }, scanFull, maps);
-eq('typed values never overwritten', [f3.item.name, f3.item.barcode, f3.item.unit], ['साखर', '123', 'kg']);
+const f3 = fillItemFromScan(typed, { isNew: true, touched: new Set(['name_marathi', 'barcode', 'unit']) }, scanFull, maps);
+eq('typed values never overwritten', [f3.item.name, f3.item.name_marathi, f3.item.barcode, f3.item.unit], ['साखर', 'साखर', '123', 'kg']);
+const typedEng = fillItemFromScan({ ...blankNew, name: '', name_eng: '' }, { isNew: true, touched: new Set(['name_eng']) }, scanFull, maps);
+eq('typed (even cleared) English is not filled; Marathi still is', [typedEng.item.name_eng, typedEng.item.name_marathi], ['', 'पारले-जी ग्लुको बिस्किट २५० ग्रॅम']);
 const f4 = fillItemFromScan({ ...blankNew, purchase_price: 0 }, { isNew: true, touched: new Set(['purchase_price']) }, scanFull, maps);
 eq('touched MRP (even 0) is not filled', f4.item.purchase_price, 0);
 const nothing = fillItemFromScan(blankNew, { isNew: true, touched: new Set() },
@@ -364,6 +377,63 @@ check('unsure flag on an unusual product', shortBilingualName({ productEng: 'Zen
 const unusual = shortBilingualName({ productEng: 'Zentrix Alpha Omega Delta Ultra Pro Max', netQty: '50 g' }, maps);
 check('unsure: at most 2 words + size', unusual.name_eng.split(' ').length <= 3, unusual.name_eng);
 check('printedLength ignores matras/virama', printedLength('क्रीम') === 3, String(printedLength('क्रीम')));
+
+// ── Two name fields (popup) ──────────────────────────────────────────────────
+const both = { id: 'x', name: 'साखर', name_marathi: 'साखर', name_eng: 'sugar' };
+eq('editing English never touches Marathi', withItemNames(both, { eng: 'sugar 1kg' }), { ...both, name_eng: 'sugar 1kg', name: 'साखर' });
+eq('editing Marathi never touches English', withItemNames(both, { marathi: 'साखर १ किलो' }),
+  { ...both, name_marathi: 'साखर १ किलो', name: 'साखर १ किलो' });
+eq('Marathi cleared → name falls back to English', withItemNames(both, { marathi: '' }).name, 'sugar');
+eq('both cleared → empty name', withItemNames(both, { marathi: '', eng: '' }).name, '');
+eq('legacy item with only a Latin name shows it as English', itemNameFields({ name: 'sugar' }), { eng: 'sugar', marathi: '' });
+eq('legacy item with only a Devanagari name shows it as Marathi', itemNameFields({ name: 'साखर' }), { eng: '', marathi: 'साखर' });
+check('every inventory.json item keeps name = Marathi', inventory.every(i => withItemNames(i, {}).name === (i.name_marathi || i.name_eng)));
+
+// ── OCR spelling with the shop's own words ───────────────────────────────────
+const vocab = buildSpellVocab(inventory);
+check('vocab has shop words and brands', vocab.has('masurdal') && vocab.has('britannia') && vocab.has('biscuit'));
+eq('rn read for m (shop word)', spellFixEnglish('Rnasurdal', vocab).text, 'Masurdal');
+eq('one letter lost (brand)', spellFixEnglish('BRITANIA Biscuit', vocab).text, 'BRITANNIA Biscuit');
+eq('swapped letters', spellFixEnglish('turdla', vocab).text, 'turdal');
+eq('known words untouched', spellFixEnglish('Sugar Tea Masala 250g', vocab).text, 'Sugar Tea Masala 250g');
+eq('unknown word with nothing close is kept', spellFixEnglish('Rajwadi', vocab).text, 'Rajwadi');
+eq('sizes and codes untouched', spellFixEnglish('200g B12 A2B114', vocab).text, '200g B12 A2B114');
+check('a word still looking misread is reported unsure', spellFixEnglish('Zx1kq Tea', vocab).unsure.includes('Zx1kq'));
+eq('osa: swap = 1', osaDistance('noodels', 'noodles'), 1);
+check('a tie is never fixed', spellFixWord('pasle', new Set(['paste', 'parle'])) === null);
+// learned corrections: the user fixed a word once → fixed next time
+const learnedFix = learnSpellingFixes({}, 'parle-g glcuo biscuit 250g', 'parle-g gluco biscuit 250g');
+eq('spelling fix learned', learnedFix['!fix:glcuo'], 'gluco');
+eq('spelling fix applied next time', spellFixEnglish('Glcuo Biscuit', vocab, learnedFix).text, 'Gluco Biscuit');
+eq('a different word is not learned as a misspelling', learnSpellingFixes({}, 'lux soap 100g', 'lux shampoo 100g'), {});
+const spelled = fillItemFromScan(blankNew, { isNew: true, touched: new Set() },
+  { ...scanFull, brand: 'Britannia', name_eng: 'Good Day Cashevv Cookies', net_qty: '75 g' }, { ...maps, vocab });
+eq('fill uses the shop vocabulary', spelled.item.name_eng, 'good day cashew cookie 75g');
+eq('fill reports spelling changes', spelled.spellChanges, [['Cashevv', 'cashew']]);
+
+// ── Tap-to-pick: recognised line → field ─────────────────────────────────────
+eq('pick MRP: digit look-alikes', parsePickedPrice('M.R.P. ₹ 4S.OO incl. of all taxes'), 45);
+eq('pick MRP: Rs.45/-', parsePickedPrice('MRP Rs.45/-'), 45);
+eq('pick MRP: (incl. of all taxes) before the value', parsePickedPrice('MRP (Incl. of all taxes) ₹ 105.00'), 105);
+eq('pick MRP: print gap', parsePickedPrice('MRP ₹ 1 08.00'), 108);
+eq('pick MRP: lone number', parsePickedPrice('45.00'), 45);
+eq('pick MRP: a weight is not a price', parsePickedPrice('Net Wt 200 g'), null);
+eq('pick MRP: a phone number is not a price', parsePickedPrice('Customer care 1800 102 2552'), null);
+eq('pick MRP: out of range', parsePickedPrice('MRP ₹ 12500'), null);
+eq('pick weight', [parsePickedQty('Net Wt. 2OO g'), parsePickedQty('Net Qty 1 Ltr'), parsePickedQty('MRP 45')], ['200 g', '1 L', null]);
+eq('pick weight: impossible size', parsePickedQty('Net Wt 500 kg'), null);
+eq('pick barcode', [parsePickedBarcode('89O1O3O 8O5431'), parsePickedBarcode('B.No. 1234')], ['8901030805431', null]);
+eq('pick English name', parsePickedName('Good Day Cashew Cookies 75 G'), 'good day cashew cookies 75g');
+eq('fixDigits keeps words', [fixDigits('Rs.45'), fixDigits('1ltr'), fixDigits('2OOg'), fixDigits('4S.OO')], ['Rs.45', '1ltr', '200g', '45.00']);
+
+// ── "Copy details": MRP readings, alternates, warnings ───────────────────────
+const details2 = formatScanDetails({ ...scanBase, mrp: 45, mrp_alternates: [40], warnings: ['Check both dates.'],
+  suggestions: { brand: 'Parle' },
+  debug: { mrpReadings: ['₹45: score 1.01 (MRP, read 2×, photo 2)', '₹40: score 0.90 (MRP, read 1×, photo 3)'],
+    photos: [{ photo: 1, size: '4000x3000', passes: 'plain, contrast', exifRotation: 90, turned: 270, ocrLatin: '[h14 c91] MRP ₹ 45.00' }] } });
+check('details: MRP readings and alternates', details2.includes('MRP READINGS') && details2.includes('alternates offered: ₹40'));
+check('details: passes, rotation, warnings, suggestions', details2.includes('OCR passes plain, contrast; EXIF 90°; turned 270°')
+  && details2.includes('Check both dates.') && details2.includes('suggested brand: Parle'));
 
 if (failures) { console.error(`\n${failures} check(s) failed`); process.exit(1); }
 console.log('All item-name checks passed');

@@ -1,0 +1,18 @@
+# held-out: l read inside the MRP digits
+id: h03-nescafe-l-in-price
+expect.mrp: 310
+expect.weight: 50 g
+expect.mfg: 2026-09-01
+expect.exp: 2028-08-31
+expect.brand: Nescafe
+expect.name: classic coffee
+expect.barcode: -
+== photo
+-- latin
+40|NESCAFE
+28|Classic Coffee
+== photo
+-- latin
+M.R.P. ₹ 3l0.00
+Net Wt. 50 g
+MFG 09/2026 EXP 08/2028

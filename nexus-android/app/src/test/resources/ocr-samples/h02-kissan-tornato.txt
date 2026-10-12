@@ -1,0 +1,19 @@
+# held-out: m read as rn in the product word
+id: h02-kissan-tornato
+expect.mrp: 120
+expect.weight: 950 g
+expect.mfg: 2026-07-01
+expect.exp: 2027-07-01
+expect.brand: Kissan
+expect.name: tomato ketchup
+expect.barcode: -
+== photo
+-- latin
+46|Kissan
+26|Fresh Tornato Ketchup
+== photo
+-- latin
+MRP: ₹ 120/-
+Net Wt. 950 g
+Mfd: 07/2026
+Best before 12 months from manufacture

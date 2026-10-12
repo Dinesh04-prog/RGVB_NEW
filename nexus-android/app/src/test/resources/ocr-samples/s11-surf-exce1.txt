@@ -1,0 +1,18 @@
+# l read as 1 at the end of the brand
+id: s11-surf-exce1
+expect.mrp: 10
+expect.weight: 80 g
+expect.mfg: 2025-12-01
+expect.exp: -
+expect.brand: Surf Excel
+expect.name: easy wash
+expect.barcode: -
+== photo
+-- latin
+40|Surf exce1
+20|Easy Wash
+== photo
+-- latin
+MRP Rs 1O/-
+Net Qty 8O g
+MFD 12/25

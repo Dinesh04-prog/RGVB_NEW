@@ -1,0 +1,19 @@
+# held-out: i read as l in the brand; toll-free number on the back
+id: h04-horlicks-phone
+expect.mrp: 255
+expect.weight: 500 g
+expect.mfg: 2026-06-01
+expect.exp: 2027-05-31
+expect.brand: Horlicks
+expect.name: chocolate delight
+expect.barcode: -
+== photo
+-- latin
+48|Horllcks
+24|Chocolate Delight
+== photo
+-- latin
+MRP Rs. 255.00 incl. all taxes
+Customer care 1800 102 2552
+Net Wt. 500 g
+PKD 06/2026 EXP 05/2027

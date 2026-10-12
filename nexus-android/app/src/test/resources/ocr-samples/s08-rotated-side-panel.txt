@@ -1,0 +1,21 @@
+# MRP / size / dates printed sideways on the side panel; the plain pass reads only junk
+id: s08-rotated-side-panel
+expect.mrp: 25
+expect.weight: 50 g
+expect.mfg: 2026-01-01
+expect.exp: 2026-12-31
+expect.brand: Bikaji
+expect.name: bhujia
+expect.barcode: -
+== photo
+-- latin
+38|Bikaji
+26|Bhujia
+== photo
+-- latin
+14,200,40,20,0.20|lI1
+14,260,40,20,0.20|~
+-- latin rot90
+14,40,20,300,0.85|M.R.P. ₹ 25.00 (incl. of all taxes)
+14,80,20,200,0.85|Net Wt. 50 g
+14,120,20,300,0.85|PKD 01/2026  EXP 12/2026

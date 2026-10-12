@@ -1,0 +1,25 @@
+# old MRP on the crimp, new MRP on the back: the back is read twice (plain + enhanced), the crimp once
+id: s04-two-mrps-two-photos
+expect.mrp: 45
+expect.mrp_alts: 40
+expect.weight: 100 g
+expect.mfg: 2026-01-01
+expect.exp: 2028-12-31
+expect.brand: Lux
+expect.name: soft glow
+expect.barcode: -
+== photo
+-- latin
+52|LUX
+20|Soft Glow
+== photo
+-- latin
+14,100,20,300,0.80|Net Wt. 1OO g
+14,140,20,300,0.82|M.R.P. ₹ 45.OO incl of all taxes
+14,180,20,300,0.80|MFG: O1/2026 EXP: 12/2028
+-- latin enhanced
+14,140,20,300,0.90|M.R.P. ₹ 45.00 incl of all taxes
+== photo
+-- latin
+14,60,20,200,0.70|MRP Rs. 40.00
+14,100,20,200,0.70|B.No. A2214

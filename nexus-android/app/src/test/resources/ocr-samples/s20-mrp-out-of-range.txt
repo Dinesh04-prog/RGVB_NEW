@@ -1,0 +1,20 @@
+# glare adds a digit on one photo (12500 is impossible for a 200 ml bottle); the other photo is clean
+id: s20-mrp-out-of-range
+expect.mrp: 125
+expect.weight: 200 ml
+expect.mfg: 2026-03-12
+expect.exp: 2028-03-11
+expect.brand: Patanjali
+expect.name: kesh kanti shampoo
+expect.barcode: -
+== photo
+-- latin
+40|Patanjali
+24|Kesh Kanti Shampoo
+14|MRP ₹ 12500
+== photo
+-- latin
+MRP ₹ 125.00
+Net Vol 200 ml
+MFD : 1 2 . 0 3 . 2 0 2 6
+EXP : 1 1 . 0 3 . 2 0 2 8

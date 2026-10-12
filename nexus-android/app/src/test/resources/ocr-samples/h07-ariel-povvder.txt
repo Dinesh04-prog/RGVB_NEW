@@ -1,0 +1,18 @@
+# held-out: w read as vv; MRP without paise
+id: h07-ariel-povvder
+expect.mrp: 235
+expect.weight: 1 kg
+expect.mfg: 2026-02-01
+expect.exp: -
+expect.brand: Ariel
+expect.name: detergent powder
+expect.barcode: -
+== photo
+-- latin
+44|Ariel
+20|Matic Detergent Povvder
+== photo
+-- latin
+MRP ₹ 235 (incl. of all taxes)
+Net Wt 1 kg
+MFD 02/2026

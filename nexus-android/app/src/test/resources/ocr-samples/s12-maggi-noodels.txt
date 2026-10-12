@@ -1,0 +1,20 @@
+# I read as l in the brand, two letters swapped in the product word
+id: s12-maggi-noodels
+expect.mrp: 14
+expect.weight: 70 g
+expect.mfg: 2026-05-01
+expect.exp: 2027-02-01
+expect.brand: Maggi
+expect.name: noodles
+expect.barcode: -
+== photo
+-- latin
+50|MAGGl
+26|2-Minute Noodels
+14|Masala
+== photo
+-- latin
+MRP: ₹ 14.OO
+Net Wt.: 7O g
+PKD: MAY 2026
+USE BEFORE 9 MONTHS FROM PACKAGING

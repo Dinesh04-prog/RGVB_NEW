@@ -1,0 +1,22 @@
+# held-out: side panel turned the other way; only the 270 pass reads it
+id: h06-rotated-270
+expect.mrp: 40
+expect.weight: 100 g
+expect.mfg: 2026-03-01
+expect.exp: 2027-02-28
+expect.brand: Catch
+expect.name: chaat masala
+expect.barcode: -
+== photo
+-- latin
+32|catch
+24|Chaat Masala
+== photo
+-- latin
+14,300,10,30,0.15|:
+-- latin rot90
+14,40,20,200,0.30|II l1
+-- latin rot270
+14,40,20,200,0.88|MRP Rs.40/-
+14,80,20,200,0.88|Net Wt. 100 g
+14,120,20,300,0.88|MFG 03/2026 EXP 02/2027

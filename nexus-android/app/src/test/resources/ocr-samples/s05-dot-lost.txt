@@ -1,0 +1,20 @@
+# the decimal point is lost on the plain photo ("4500"); the enhanced copy and the pack size say 45
+id: s05-dot-lost
+expect.mrp: 45
+expect.weight: 100 g
+expect.mfg: 2025-08-01
+expect.exp: 2027-07-31
+expect.brand: Everest
+expect.name: garam masala
+expect.barcode: -
+== photo
+-- latin
+46|EVEREST
+30|GARAM MASALA
+== photo
+-- latin
+14,100,20,300,0.60|MRP ₹ 4500
+14,140,20,300,0.85|NET WT 100 g
+14,180,20,300,0.85|MFD: AUG 2025  BB: JUL 2027
+-- latin enhanced
+14,100,20,300,0.88|MRP ₹ 45.00

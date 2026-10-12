@@ -1,0 +1,21 @@
+# two prices on one pack: offer price and MRP; the offer is never the MRP
+id: s17-offer-and-mrp
+expect.mrp: 50
+expect.weight: 200 g
+expect.mfg: 2026-02-01
+expect.exp: 2026-11-01
+expect.brand: Britannia
+expect.name: milk bikis
+expect.barcode: -
+== photo
+-- latin
+40|Britannia
+30|Milk Bikis
+20|OFFER PRICE ₹ 45
+16|SAVE ₹ 5
+== photo
+-- latin
+MRP ₹ 50.00 (incl. of all taxes)
+Net Wt 200 g
+PKD 02/2026
+Best before 9 months

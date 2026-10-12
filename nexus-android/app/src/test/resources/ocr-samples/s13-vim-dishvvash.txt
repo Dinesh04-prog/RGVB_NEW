@@ -1,0 +1,18 @@
+# m read as rn, w read as vv
+id: s13-vim-dishvvash
+expect.mrp: 10
+expect.weight: 155 g
+expect.mfg: 2026-01-01
+expect.exp: 2027-12-31
+expect.brand: Vim
+expect.name: lemon dishwash bar
+expect.barcode: -
+== photo
+-- latin
+36|vim
+24|Lernon Dishvvash Bar
+== photo
+-- latin
+M R P ₹ 1O.OO
+Net Wt. 155 g
+MFD O1 26  USE BY 12 27

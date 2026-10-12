@@ -1,0 +1,20 @@
+# l read as capital I in the brand; glare on the MRP in the plain pass
+id: s15-sunsilk-glare
+expect.mrp: 210
+expect.weight: 180 ml
+expect.mfg: 2026-01-01
+expect.exp: 2028-12-31
+expect.brand: Sunsilk
+expect.name: black shine
+expect.barcode: -
+== photo
+-- latin
+38|SUNS1LK
+20|Black Shine
+== photo
+-- latin
+14,100,20,300,0.40|M.R.P. ₹ 2__.00
+14,140,20,300,0.85|Net Vol 18O ml
+14,180,20,300,0.85|MFG O1/2026 EXP 12/2028
+-- latin enhanced
+14,100,20,300,0.83|M.R.P. ₹ 210.00

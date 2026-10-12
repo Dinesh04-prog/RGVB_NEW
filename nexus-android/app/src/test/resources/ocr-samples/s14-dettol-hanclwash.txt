@@ -1,0 +1,18 @@
+# d read as cl
+id: s14-dettol-hanclwash
+expect.mrp: 99
+expect.weight: 200 ml
+expect.mfg: 2026-02-01
+expect.exp: 2029-01-31
+expect.brand: Dettol
+expect.name: handwash
+expect.barcode: -
+== photo
+-- latin
+44|Dettol
+24|Original Liquid Hanclwash
+== photo
+-- latin
+M.R.P.: Rs.99.00 (incl of all taxes)
+Net Vol: 200 ml
+Mfg: O2/2026 Exp: O1/2029

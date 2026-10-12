@@ -1,0 +1,19 @@
+# inkjet MRP with a space between every character
+id: s22-spaced-mrp
+expect.mrp: 120
+expect.weight: 500 g
+expect.mfg: 2026-01-20
+expect.exp: 2027-01-20
+expect.brand: Wagh Bakri
+expect.name: leaf tea
+expect.barcode: 8901048101013
+== photo
+-- latin
+44|Wagh Bakri
+26|Premium Leaf Tea
+== photo
+-- latin
+M.R.P ₹ 1 2 0 . 0 0
+Net Wt 5OO g
+PKD 2O/O1/2026 BEST BEFORE 12 MONTHS
+89O1O48 1O1O13

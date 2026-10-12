@@ -1,0 +1,19 @@
+# every pass loses the MRP digits: the MRP must stay empty, never a guess
+id: s23-heavy-glare-no-guess
+expect.mrp: -
+expect.weight: 400 g
+expect.mfg: -
+expect.exp: -
+expect.brand: Amul
+expect.name: milk powder
+expect.barcode: -
+== photo
+-- latin
+40|AMUL
+28|Dairy Whitener Milk Powder
+== photo
+-- latin
+14,100,20,300,0.30|M.R.P. ₹ ?_.00
+14,140,20,300,0.80|Net Wt. 400 g
+-- latin enhanced
+14,100,20,300,0.35|M.R.P. ₹ 2?.#0

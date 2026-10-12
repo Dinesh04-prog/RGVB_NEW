@@ -1,0 +1,19 @@
+# MRP digits split by a gap in the print ("1 08.00"); l read as 1 in the brand, m read as rn
+id: s02-colgate-split-mrp
+expect.mrp: 108
+expect.weight: 200 g
+expect.mfg: 2026-03-01
+expect.exp: 2028-02-29
+expect.brand: Colgate
+expect.name: strong teeth dental cream
+expect.barcode: -
+== photo
+-- latin
+50|Co1gate
+30|Strong Teeth
+18|Dental Crearn
+== photo
+-- latin
+MRP ₹ 1 08.00
+Net Wt. 200 g
+MFD: 03/2026  EXP: 02/2028

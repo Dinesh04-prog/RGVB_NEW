@@ -1,0 +1,20 @@
+# e read as c inside a product word
+id: s09-fortune-sunflowcr
+expect.mrp: 185
+expect.weight: 1 L
+expect.mfg: 2026-02-15
+expect.exp: 2026-11-15
+expect.brand: Fortune
+expect.name: sunflower oil
+expect.barcode: -
+== photo
+-- latin
+44|Fortune
+22|Refined Sunflowcr Oil
+== photo
+-- latin
+Net Qty: 1 L (910 g)
+MRP Rs.185.OO
+incl. of all taxes
+PKD ON: 15 FEB 2026
+BEST BEFORE 9 MONTHS FROM PACKING

@@ -1,0 +1,20 @@
+# S read as 5 and O as 0 inside the MRP
+id: s18-tata-salt-S5
+expect.mrp: 25
+expect.weight: 1 kg
+expect.mfg: 2025-12-01
+expect.exp: 2027-12-01
+expect.brand: Tata
+expect.name: salt
+expect.barcode: -
+== photo
+-- latin
+42|TATA
+40|SALT
+14|Vacuum Evaporated Iodised Salt
+== photo
+-- latin
+Net Wt. 1 kg
+MRP ₹ 2S.OO
+Pkd. 12/2025
+Best before 24 months from packing

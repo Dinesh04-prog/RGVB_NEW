@@ -1,0 +1,21 @@
+# held-out: the enhanced pass is worse than the plain one in the same region; the plain read must be kept
+id: h09-enhanced-pass-worse
+expect.mrp: 48
+expect.weight: 100 g
+expect.mfg: 2026-01-01
+expect.exp: 2026-12-31
+expect.brand: Everest
+expect.name: chilli powder
+expect.barcode: -
+== photo
+-- latin
+40|EVEREST
+26|Chilli Powder
+== photo
+-- latin
+14,100,20,300,0.90|MRP ₹ 48.00
+14,140,20,300,0.90|Net Wt. 100 g
+14,180,20,300,0.90|MFG 01/2026 EXP 12/2026
+-- latin enhanced
+14,100,20,300,0.45|MRP ₹ 4_.00
+14,140,20,300,0.40|Net Wt. 10O q

@@ -24,6 +24,14 @@ export interface ProductScanResult {
   source: Partial<Record<ScanField, ScanSource>>;
   offStatus: 'found' | 'not_found' | 'error' | 'skipped' | 'rate_limited';
   photoCount?: number;            // 1–5; photos themselves are never sent to the web app
+  /** other MRP values read (best first): one-tap chips under the MRP field */
+  mrp_alternates?: number[];
+  /** short English messages for the popup ("check both dates", ignored prices) */
+  warnings?: string[];
+  /** Open Food Facts values that disagree with a weak OCR read: offered, never filled */
+  suggestions?: Partial<Record<'name_eng' | 'brand' | 'net_qty', string>>;
+  /** merged OCR lines of all photos, for "Recognised text" (tap a line to use it) */
+  recognised?: { photo: number; text: string }[];
   debug?: ScanDebug;
 }
 
@@ -34,11 +42,17 @@ export interface ScanDebug {
     photo: number;                 // 1-based
     size: string;
     barcodeMlkit?: { value: string; format: string; checksumOk: boolean } | null;
-    ocrLatin?: string;
+    exifRotation?: number;         // degrees, handed to ML Kit
+    turned?: number;               // 90 / 270 when the photo read very little text as taken
+    passes?: string;               // OCR passes merged, e.g. "plain, contrast, sharpened"
+    ocrLatin?: string;             // merged lines, "[h<height> c<confidence %>] text"
     ocrDevanagari?: string;
+    ms?: number;
   }[];
   /** field → photo number it was taken from; 0 = all photos' text combined */
   pickedFrom?: Partial<Record<ScanField, number>>;
+  /** every MRP value read, with its score and why */
+  mrpReadings?: string[];
   openFoodFacts?: { name: string | null; brand: string | null; quantity: string | null } | null;
   timingsMs?: Record<string, number>;
 }
@@ -119,6 +133,10 @@ export const formatScanDetails = (r: ProductScanResult): string => {
     const bc = p.barcodeMlkit;
     out.push(block(`PHOTO ${p.photo} (${p.size}) · barcode`,
       bc ? `${bc.value} (${bc.format}, checksum ${bc.checksumOk ? 'ok' : 'FAILED'})` : 'not found'));
+    if (p.passes) {
+      out.push(`photo ${p.photo}: OCR passes ${p.passes}; EXIF ${p.exifRotation ?? 0}°` +
+        (p.turned ? `; turned ${p.turned}° (little text as taken)` : '') + (p.ms != null ? `; ${p.ms} ms` : ''));
+    }
     out.push(block(`PHOTO ${p.photo} · OCR Latin`, p.ocrLatin));
     out.push(block(`PHOTO ${p.photo} · OCR Devanagari`, p.ocrDevanagari));
   }
@@ -127,9 +145,16 @@ export const formatScanDetails = (r: ProductScanResult): string => {
     const v = (r as unknown as Record<string, unknown>)[k];
     return `${k}: ${v ?? 'null'} · ${r.source[k] ?? '-'} · ${r.confidence[k]?.toFixed(2) ?? '-'} · ${photoLabel(d.pickedFrom?.[k])}`;
   }).join(NL)));
+  if (d.mrpReadings?.length || r.mrp_alternates?.length) {
+    out.push(block('MRP READINGS (best first)', [...(d.mrpReadings || []),
+      ...(r.mrp_alternates?.length ? [`alternates offered: ${r.mrp_alternates.map(v => `₹${v}`).join(', ')}`] : [])].join(NL)));
+  }
+  if (r.warnings?.length) out.push(block('WARNINGS', r.warnings.join(NL)));
   const off = d.openFoodFacts;
+  const sug = Object.entries(r.suggestions || {});
   out.push(block('OPEN FOOD FACTS', [`status: ${r.offStatus}`,
-    ...(off ? [`name: ${off.name}`, `brand: ${off.brand}`, `quantity: ${off.quantity}`] : [])].join(NL)));
+    ...(off ? [`name: ${off.name}`, `brand: ${off.brand}`, `quantity: ${off.quantity}`] : []),
+    ...sug.map(([k, v]) => `suggested ${k}: ${v}`)].join(NL)));
   if (d.timingsMs) out.push(`timings ms: ${Object.entries(d.timingsMs).map(([k, v]) => `${k}=${v}`).join(' ')}`);
   return out.join(NL + NL);
 };

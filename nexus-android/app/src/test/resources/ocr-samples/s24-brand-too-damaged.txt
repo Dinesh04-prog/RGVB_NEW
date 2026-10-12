@@ -1,0 +1,19 @@
+# brand damaged beyond a safe fix ("Brtnia"): it must NOT be guessed, so this sample is expected to fail on brand
+id: s24-brand-too-damaged
+expect.mrp: 20
+expect.weight: 150 g
+expect.mfg: 2026-02-20
+expect.exp: 2026-08-20
+expect.brand: Britannia
+expect.name: marie gold
+expect.barcode: -
+== photo
+-- latin
+36|Brtnia
+48|MARIE GOLD
+== photo
+-- latin
+MRP Rs. 2O.OO
+NET WT 15O g
+MFD DT: 2O/O2/2O26
+BEST BEFORE 6 MONTHS FROM MFD

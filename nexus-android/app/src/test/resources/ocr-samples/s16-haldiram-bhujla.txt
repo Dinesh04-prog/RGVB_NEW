@@ -1,0 +1,19 @@
+# l read as 1 in the brand, i read as l in the product
+id: s16-haldiram-bhujla
+expect.mrp: 55
+expect.weight: 150 g
+expect.mfg: 2026-01-23
+expect.exp: 2026-05-22
+expect.brand: Haldiram's
+expect.name: aloo bhujia
+expect.barcode: 8904063201034
+== photo
+-- latin
+38|Ha1diram's
+30|Aloo Bhujla
+== photo
+-- latin
+MRP:₹55/-
+Net Wt.: 15O g
+PKD:23/O1/26 USE BY:22/O5/26
+89O4O63 2O1O34

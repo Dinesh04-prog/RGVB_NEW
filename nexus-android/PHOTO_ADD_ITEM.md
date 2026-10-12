@@ -1,55 +1,90 @@
 # Fill an inventory item from photos (Android app)
 
-A **📷 फोटोवरून भरा** button sits at the top of the normal **Add / Edit Inventory Item** popup
+A **📷 Fill from Photos** button sits at the top of the normal **Add / Edit Inventory Item** popup
 (only inside the Android app). Take 1–5 photos of the pack (front, back, side, crimp); the app reads them on the
 phone and fills the popup's empty fields. Everything stays editable, and **SAVE CHANGES** works exactly as before.
-Running cost: **zero**, with no API keys and no billing account.
+Running cost: **zero**, with no API keys and no billing account. All text of this feature is English; only product
+data (Marathi names) is in Devanagari. Colours follow the app: blue `#0d6efd` (main buttons), light blue `#e7f1ff`,
+dark blue `#0a3d62`, green `#16A34A` (Done), white backgrounds, and a soft yellow `#FFF9DB` for "auto-filled, check this".
 
 ## How it works
 
 ```
-Add / Edit popup → "📷 फोटोवरून भरा"                       PhotoScanFill.tsx + usePhotoScanFill.ts
+Add / Edit popup → "📷 Fill from Photos"                   PhotoScanFill.tsx + usePhotoScanFill.ts
   → window.AndroidScan.startProductScan()                    AndroidScanBridge.kt
-  → ProductScanActivity (CameraX): photo counter 1–5, "पुन्हा घ्या" (retake last), "+ आणखी फोटो",
-    "✓ झाले" (Done), tap-to-focus, torch, guide frame
-  → ScanPipeline (background thread), per photo: ML Kit barcode + OCR Latin + OCR Devanagari
+  → ProductScanActivity (CameraX, ~12 MP): "Photo 2/5", "↺ Retake", "+ Add another photo", "✓ Done",
+    tap-to-focus, torch, guide frame. Each shot focuses first; each photo is checked for blur / dark / glare
+    and a problem makes "Retake" the main button (the user may keep the photo).
+  → ScanPipeline (background thread), per photo at full resolution:
+      ML Kit barcode; OCR Latin as taken (turned 90°/270° only when that reads very little text);
+      OCR Devanagari; OCR Latin again on a grey contrast-stretched copy and, if some reads are weak, a sharpened copy;
+      OcrMerge: one line per region (highest ML Kit confidence wins), read column by column
   → ScanMerge.kt picks each field across photos (below)
-  → Open Food Facts (free, no key): fills name / brand / size only if OCR left them blank or weak
+  → Open Food Facts (free, no key): fills blank name / brand / size; disagreements with weak reads become suggestions
   → result JSON in filesDir/scan_result.json → MainActivity → window.onProductScanResult(json)
   → photoFill.ts fills only empty fields of the open popup → the user edits → SAVE CHANGES
   → saveInventoryEdit() → upsertInventoryItem() (the only write path)
 ```
 
 **Bridge result** (`ProductScanResult` in `src/lib/androidScan.ts`): `name_eng, name_marathi, brand, unit, net_qty,
-mrp, barcode, barcodeVerified, mfg_date, expiry_date, confidence{}, source{}, offStatus, photoCount, debug`.
-Photos and thumbnails are **not** sent to the web app.
+mrp, mrp_alternates[], barcode, barcodeVerified, mfg_date, expiry_date, confidence{}, source{}, offStatus, photoCount,
+warnings[], suggestions{}, recognised[], debug`. Photos and thumbnails are **not** sent to the web app.
 
 ### Merging photos (ScanMerge.kt)
 * **Barcode:** the first photo whose ML Kit barcode passes the EAN/UPC checksum. Otherwise checksum-valid digits
   read by OCR (highest confidence). Otherwise the first ML Kit barcode, marked unverified.
-* **MRP, net qty, MFG, EXP:** parsed on every photo **and** on all photos' text joined, so that "best before 9
+* **MRP:** every reading of every photo **and** every OCR pass is a candidate. Score = anchor (MRP / M.R.P / Max
+  Retail Price 0.9, "MRP" misread as MRF/MPR 0.75, ₹/Rs only 0.5) + "incl. of all taxes" + next to the net weight
+  + 0.06 for each extra pass/photo that read the same value − 0.3 when the price per kg / L is outside ₹2–₹20,000.
+  Rejected: unit prices, offer / save / special prices, batch numbers, phone numbers, values outside ₹1–₹10,000,
+  digits running into glare (`2__.00`). Split and inkjet-spaced digits are joined (`₹ 1 08.00`, `1 2 0 . 0 0`).
+  The best one is used; other values come back as `mrp_alternates`. A close strong alternate marks the MRP weak.
+* **Net qty, MFG, EXP:** parsed on every photo **and** on all photos' text joined, so that "best before 9
   months" on one photo combines with the PKD date on another. The highest confidence wins, with the earliest photo
   on ties. If another photo has a different value with similar confidence, the value is kept but marked weak.
-* **Brand and English name:** each photo is parsed as if it were the front. A known brand or product word scores
-  first, then the photo with the largest text (normally the front). Company lines, storage and usage text are ignored.
+  Sizes outside 1 g / 1 ml – 50 kg / 50 L are treated as misreads.
+* **Brand and English name:** each photo is parsed as if it were the front, after OCR spelling fixes (below).
+  A known brand or product word scores first, then the photo with the largest text (normally the front).
+  Company lines, storage and usage text are ignored.
 * **Marathi name:** the photo with the tallest Devanagari name line.
-* An expiry that is not after the MFG date is kept but marked weak.
+* An expiry that is not after the MFG date is kept but marked weak, with a warning to check both dates.
+
+### Spelling of names
+* On the phone (`NameSpell.kt`): brand words (`LabelParser.KNOWN_BRANDS`) and common product words. A word is changed
+  only when it is not a known word and either undoing an OCR confusion makes it one (rn→m, vv→w, cl→d, 1→l/i, 0→o,
+  5→s, l↔i, c→e) or exactly one known word is 1 edit away (5–7 letters) / 2 edits away (8+ letters). Ties and
+  far-off words are kept as read; a word that still looks misread ("Exce1") lowers the name confidence.
+* In the popup (`spellFixEnglish` in `itemNames.ts`): the same rule with the shop's own vocabulary (every word of
+  the inventory names and brands, and the word lists) plus corrections the user made before (`!fix:<read>` in
+  `photo_name_map`, learned when a suggested English word is edited before Save).
 
 ### Filling the popup (photoFill.ts)
 * Only **empty** fields are filled, and never a field the user has typed in this popup. In **Edit** mode, saved
   values are never overwritten. A price or MRP of 0 counts as empty.
-* The visible name box gets the Marathi name (`name` = `name_marathi`). The hidden `name_eng` is added only
-  together with it, in the shop style (`"parle-g original gluco biscuits 250g"` / `"पारले-जी … २५० ग्रॅम"`).
+* **Two name fields**, one below the other: **Item Name (English)** → `name_eng` and **Item Name (Marathi)** →
+  `name_marathi`. Each is filled on its own when empty, each has its own yellow, and editing one never changes or
+  converts the other (the old A / अ toggle is gone). `name` = Marathi if present, otherwise English.
+  Older items with only `name` show it in the matching box. Save needs at least one name; a soft-yellow note says
+  when the other one is empty. Shop style: `"parle-g gluco biscuit 250g"` / `"पारले-जी ग्लुको बिस्किट २५० ग्रॅम"`.
 * Also filled: barcode, MRP → `purchase_price`, sale rate = MRP when empty, unit (`pcs`; a new item's default
-  `kg` counts as empty), and the hidden `brand`, `net_qty`, `expiry_date`, `mfg_date`.
-  For an existing item with no short code, `search_key` is filled too. **Stock is never filled.**
-* Auto-filled fields get a light yellow background, which disappears when the user edits that field.
-* **Duplicates** (only after a scan): the same barcode on another item shows a red **"Item already exists"** notice
-  with **Open existing item**, and Save is blocked for a new item. The same name and size without a barcode match
-  shows a yellow warning, and Save is still allowed.
+  `kg` counts as empty), `net_qty` (shown as **PACK SIZE** after a scan), and the hidden `brand`, `expiry_date`,
+  `mfg_date`. For an existing item with no short code, `search_key` is filled too. **Stock is never filled.**
+* Auto-filled fields get a soft yellow background, which disappears when the user edits that field.
+* **MRP chips:** when the photos gave different prices, chips under MRP (`₹45 · ₹40`) switch it in one tap
+  (the sale rate follows while it is still the auto-filled MRP).
+* **Suggestions:** an Open Food Facts name or size that disagrees with a weak read is shown as a chip; it is used
+  only when tapped.
+* **Recognised text** (collapsed, above "Show raw scan details"): every merged OCR line; tap a line, then
+  **→ English name / → MRP / → Weight / → Barcode**. Prices need MRP / ₹ / Rs or a lone number; weights need a unit;
+  barcodes need 8, 12 or 13 digits; anything else shows a short message and changes nothing.
+* **Warnings** (soft yellow): expiry not after MFG, and prices that were ignored when no MRP was found.
+* **Duplicates** (only after a scan): the same barcode on another item shows a red **"This item already exists"**
+  notice with **Open existing item**, and Save is blocked for a new item. The same name and size without a barcode
+  match shows a yellow warning, and Save is still allowed.
 * Scan failed, nothing read, or no internet / Open Food Facts down: a short message appears and the popup keeps
   whatever was decoded.
-* After a save, word pairs the user corrected in a suggested name are remembered locally (`photo_name_map`).
+* After a save, word pairs, removed words and English spelling fixes the user made in a suggested name are
+  remembered locally (`photo_name_map`).
 * Low-memory phones: photos live in `cacheDir` and the count and step survive Activity recreation. The result waits
   on disk; if the app restarted, a new-item popup opens and is filled.
 * Open Food Facts: one call per scan, no retries, capped at 14 calls/min in the app (their limit is 15/min/IP).
@@ -79,7 +114,7 @@ The long pack text is kept in `full_name_eng`, which is searchable (Fuse weight 
   already implies (`BRAND_IMPLIES`: colgate → toothpaste, maggi → noodles…), then other words from the end.
   The size and the core word are never dropped.
 * **Unsure** (no product type and no known brand, or words had to be cut): brand + the 2 most prominent words + size,
-  and a "नाव तपासा" note appears in the popup.
+  and a "Check the name" note appears in the popup.
 * **Marathi** is built word by word from the short English name, never cut from a long string. If it is too wide,
   one more English word goes and both names are rebuilt. Synonyms that give the same Marathi word are kept once
   ("hing asafoetida" → हिंग).
@@ -106,11 +141,22 @@ transliteration (flagged). Word pairs the user corrects are remembered in Indexe
 ## Tests
 
 * `nexus-android`: `gradle testDebugUnitTest` runs `LabelParserTest` (checksums, unit normalizer, OCR digit fixes,
-  spaced inkjet dates, and an accuracy table over 35 noisy label samples with a minimum per field) and `ScanMergeTest`
+  spaced inkjet dates, and an accuracy table over 35 noisy label samples with a minimum per field), `ScanMergeTest`
   (MRP only on photo 3, barcode only on photo 2, bad checksum on one photo, best-before and PKD on different photos,
-  conflicting names and MRPs). It runs in CI before `assembleRelease`.
+  conflicting names and MRPs), `AccuracyHelpersTest` (spelling fixes, pass merging, reading order, rotation choice,
+  blur / dark / glare, MRP candidates and rejections, weight limits, alternates and warnings) and `ReplayTest`.
+  It runs in CI before `assembleRelease`.
+* **Replay samples:** `app/src/test/resources/ocr-samples/*.txt`, one scan per file (format in `README.txt` there):
+  expected values plus the OCR lines of each photo and pass (`latin`, `latin enhanced`, `latin rot90/rot270`,
+  `devanagari`), with box positions and ML Kit confidence. They are typed by hand with realistic OCR mistakes, not
+  captured from a phone. `s01–s24` were written together with the fixes; `h01–h10` were written afterwards and run
+  once without tuning. `ReplayTest` runs them through the phone's own merge code and fails the build below a per-field
+  minimum. Known misses: s24 (brand too damaged to fix safely), h01 ("ml" read as "m1"; "Care" taken as back text),
+  h10 ("Pasle" is as close to "parle" as to "paste", so it is kept).
+  To add a real case: copy the OCR text from **📋 Copy details** into a new sample file and write the expected values.
 * `nexus-react-pos`: `npm run test:names` checks bilingual names, short code, size format, learning, duplicates,
-  the popup fill rules (new vs edit, typed fields protected, stock never filled) and the "Copy details" text.
+  the popup fill rules (new vs edit, the two name fields filled and kept separately, typed fields protected, stock
+  never filled), spelling fixes with the shop vocabulary and learned fixes, tap-to-pick parsing and the "Copy details" text.
 
 ## APK size
 
@@ -121,9 +167,16 @@ Emulators need an ARM system image because of the ABI filter.
 ## Raw scan details (for tuning)
 
 After a scan, the Add / Edit popup has a small **"Show raw scan details"** link at the bottom (collapsed by default). It shows:
-- for each photo: the ML Kit barcode result, and the raw OCR text (Latin and Devanagari, with box heights);
+- for each photo: the ML Kit barcode result, the OCR passes used, EXIF rotation and any turn, and the merged OCR
+  text (Latin and Devanagari, with box heights and ML Kit confidence);
 - for each merged field: value, source, confidence and which photo it came from;
-- the barcode that was used, the Open Food Facts response, and timings.
+- every MRP value read with its score and reason, the alternates offered, and warnings;
+- the barcode that was used, the Open Food Facts response and suggestions, spelling fixes made with the shop's
+  words, and timings.
+
+Photos are read at full size (12 MP is not downscaled; larger sensors are subsampled to ≤ 4096 px). After an
+out-of-memory error a photo is read again at 2048 px. Three Latin passes per photo take longer than one; the per-photo
+time is shown as `ms` in these details.
 
 **"📋 Copy details"** copies it as plain text, without photos. Nothing is sent anywhere.
 

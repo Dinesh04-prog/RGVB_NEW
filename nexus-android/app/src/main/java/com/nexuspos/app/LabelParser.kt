@@ -12,8 +12,14 @@ import java.time.YearMonth
  */
 object LabelParser {
 
-    /** One OCR line. [height] = bounding-box height in px (0 when unknown), [top] = y of the box. */
-    data class Line(val text: String, val height: Int = 0, val top: Int = 0)
+    /**
+     * One OCR line. [height] = bounding-box height in px (0 when unknown), [top]/[left] = box corner,
+     * [width] = box width (0 = position unknown), [confidence] = ML Kit line confidence 0..1 (-1 = unknown).
+     */
+    data class Line(
+        val text: String, val height: Int = 0, val top: Int = 0,
+        val left: Int = 0, val width: Int = 0, val confidence: Float = -1f,
+    )
 
     data class Field<T>(val value: T?, val confidence: Double) {
         companion object {
@@ -108,58 +114,99 @@ object LabelParser {
     private val MRP_ANCHOR = Regex(
         """M\s?\.?\s?R\s?\.?\s?P\s?\.?|MAX(?:IMUM)?\.?\s*RETAIL\s*PRICE|MAX\.?\s*R\.?\s*P""",
     )
+    // "MRP" misread by OCR (MRF, MPR, NRP, HRP): only counts when a number follows right away
+    private val MRP_ANCHOR_MISREAD = Regex("""\b(?:MRF|MPR|NRP|HRP|MRR)\b\s?[:.]?(?=\s*(?:₹|RS\.?)?\s*\d)""")
     private val CURRENCY_ANCHOR = Regex("""₹|\bRS\s?\.?|\bINR\b|\bRUPEES\b""")
     private val PRICE_NUM = Regex("""(\d{1,2},\d{3}(?:\.\d{1,2})?|\d{1,5}(?:[.,]\d{1,2})?)(\s*/\s*-)?""")
     private val NOT_MRP_CONTEXT = Regex(
-        """PER\b|UNIT\s*SALE|UNIT\s*PRICE|OFFER|SPECIAL\s*PRICE|DEAL|SAVE|\bOFF\b|DISCOUNT|B\s?\.?\s?NO|BATCH|\bLOT\b|FSSAI|LIC|CARE|PH\s?\.?|TEL|KCAL|COUPON|CASHBACK"""
+        """PER\b|UNIT\s*SALE|UNIT\s*PRICE|\bUSP\b|OFFER|SPECIAL\s*PRICE|DEAL|SAVE|\bOFF\b|DISCOUNT|B\s?\.?\s?NO|BATCH|\bLOT\b|FSSAI|LIC|CARE|PH\s?\.?|TEL|\bCALL|TOLL|KCAL|COUPON|CASHBACK"""
     )
     private val UNIT_AFTER = Regex("""^\s*(?:/|PER)\s*(?:\d+\s*)?(?:G|GM|KG|ML|L|LTR|UNIT|PC|PCS|N)\b""")
+    // Inkjet MRP with a space between characters: "1 2 0 . 0 0"
+    private val SPACED_PRICE = Regex("""(?<![\d.])\d(?: [\d.]){2,}(?![\d.])""")
+    // A print gap inside the number right after the anchor, only with paise: "₹ 1 08.00"
+    private val SPLIT_PRICE = Regex("""^([^\d]{0,12}?)(\d{1,2}) (\d{2,3}\.\d{2})(?!\d)""")
 
-    private data class PriceCand(val value: Double, val score: Double, val line: Int)
+    /** One MRP reading. [score] 0..1; [line] = line index in the text it was read from. */
+    data class PriceCandidate(val value: Double, val score: Double, val line: Int, val reason: String)
+
+    /** All MRP readings of a text, plus numbers that looked like a price but were rejected (value to why). */
+    data class MrpScan(val candidates: List<PriceCandidate>, val rejected: List<Pair<String, String>>)
 
     fun parseMrp(text: String): Field<Double> {
+        val cands = mrpCandidates(text).candidates
+        if (cands.isEmpty()) return Field.none()
+        val best = cands.sortedWith(compareByDescending<PriceCandidate> { it.score }.thenBy { it.line }).first()
+        // Two different strong candidates → still return the first strong one, but lower confidence.
+        val conflicting = cands.any { it.score >= 0.7 && it.value != best.value }
+        return Field(best.value, if (conflicting) minOf(best.score, 0.55) else best.score)
+    }
+
+    /** On a line with a price anchor: "1 2 0 . 0 0" → "120.00". Other lines are untouched. */
+    fun normalizePriceLine(line: String): String {
+        if (!MRP_ANCHOR.containsMatchIn(line) && !MRP_ANCHOR_MISREAD.containsMatchIn(line) &&
+            !CURRENCY_ANCHOR.containsMatchIn(line)) return line
+        return SPACED_PRICE.replace(line) { m ->
+            val v = m.value.replace(" ", "")
+            if (Regex("""\d{1,5}\.\d{2}""").matches(v)) v else m.value   // only a whole "120.00" shape
+        }
+    }
+
+    fun mrpCandidates(text: String): MrpScan {
         // OCR often reads "Rs." as "R5." / "R S." — restore it before numbers are parsed
         val lines = text.lines().map {
-            fixDigits(it).uppercase().replace(Regex("""\bR\s?[5S]\s?\.(?=\s?\d)"""), "RS. ")
+            normalizePriceLine(fixDigits(it).uppercase().replace(Regex("""\bR\s?[5S]\s?\.(?=\s?\d)"""), "RS. "))
         }
-        val cands = mutableListOf<PriceCand>()
+        val cands = mutableListOf<PriceCandidate>()
+        val rejected = mutableListOf<Pair<String, String>>()
+        // MRP is usually printed next to the net weight
+        val netLines = lines.indices.filter { NET_ANCHOR.containsMatchIn(lines[it]) }
+        fun near(li: Int) = if (netLines.any { kotlin.math.abs(it - li) <= 2 }) 0.03 else 0.0
 
         for ((li, line) in lines.withIndex()) {
             val hasIncl = line.contains("INCL") || line.contains("ALL TAX")
             // 1) Strong anchor: MRP / Max Retail Price
             for (m in MRP_ANCHOR.findAll(line)) {
                 val after = line.substring(m.range.last + 1)
-                val num = firstPriceAfter(after)
+                val num = firstPriceAfter(after, rejected = rejected)
                 if (num != null) {
                     // A "NEW MRP" sticker overrides the printed MRP
                     val isNew = line.substring(0, m.range.first).trimEnd().endsWith("NEW")
-                    cands += PriceCand(num, 0.9 + (if (hasIncl) 0.05 else 0.0) + (if (isNew) 0.1 else 0.0), li)
+                    cands += PriceCandidate(num, 0.9 + (if (hasIncl) 0.05 else 0.0) + (if (isNew) 0.1 else 0.0) + near(li),
+                        li, if (isNew) "new MRP sticker" else "MRP")
                 } else if (li + 1 < lines.size) {
                     // Anchor on one line, value on the next (common on MRP stamps)
-                    firstPriceAfter(lines[li + 1], allowUnanchoredStart = true)?.let {
-                        cands += PriceCand(it, 0.7, li)
+                    firstPriceAfter(lines[li + 1], allowUnanchoredStart = true, rejected = rejected)?.let {
+                        cands += PriceCandidate(it, 0.7 + near(li), li, "MRP, value on next line")
                     }
                 }
             }
-            // 2) Weak anchor: currency symbol without "MRP"
-            if (!MRP_ANCHOR.containsMatchIn(line)) {
-                for (m in CURRENCY_ANCHOR.findAll(line)) {
-                    val before = line.substring(0, m.range.first)
-                    if (NOT_MRP_CONTEXT.containsMatchIn(before.takeLast(25))) continue
-                    val num = firstPriceAfter(line.substring(m.range.last + 1), strictUnit = true) ?: continue
-                    cands += PriceCand(num, 0.5 + (if (hasIncl) 0.15 else 0.0), li)
+            if (MRP_ANCHOR.containsMatchIn(line)) continue
+            // 2) "MRP" misread by OCR ("MRF: 99.00")
+            val misread = MRP_ANCHOR_MISREAD.findAll(line).toList()
+            for (m in misread) {
+                firstPriceAfter(line.substring(m.range.last + 1), rejected = rejected)?.let {
+                    cands += PriceCandidate(it, 0.75 + (if (hasIncl) 0.05 else 0.0) + near(li), li, "MRP read as ${m.value.trim()}")
                 }
             }
+            if (misread.isNotEmpty()) continue
+            // 3) Weak anchor: currency symbol without "MRP"
+            for (m in CURRENCY_ANCHOR.findAll(line)) {
+                val before = line.substring(0, m.range.first)
+                if (NOT_MRP_CONTEXT.containsMatchIn(before.takeLast(25))) continue
+                val num = firstPriceAfter(line.substring(m.range.last + 1), strictUnit = true, rejected = rejected) ?: continue
+                cands += PriceCandidate(num, 0.5 + (if (hasIncl) 0.15 else 0.0) + near(li), li, "currency sign")
+            }
         }
-        if (cands.isEmpty()) return Field.none()
-        val best = cands.sortedWith(compareByDescending<PriceCand> { it.score }.thenBy { it.line }).first()
-        // Two different strong candidates → still return the first strong one, but lower confidence.
-        val conflicting = cands.any { it.score >= 0.7 && it.value != best.value }
-        return Field(best.value, if (conflicting) minOf(best.score, 0.55) else best.score)
+        return MrpScan(cands, rejected)
     }
 
-    /** First plausible price in [s]; rejects per-unit prices ("Rs 0.09/g") and implausible values. */
-    private fun firstPriceAfter(s: String, allowUnanchoredStart: Boolean = false, strictUnit: Boolean = false): Double? {
+    /** First plausible price in [s]; rejects per-unit prices ("Rs 0.09/g"), phone numbers and impossible values. */
+    private fun firstPriceAfter(
+        s0: String, allowUnanchoredStart: Boolean = false, strictUnit: Boolean = false,
+        rejected: MutableList<Pair<String, String>>? = null,
+    ): Double? {
+        val s = SPLIT_PRICE.replace(s0) { m -> m.groupValues[1] + m.groupValues[2] + m.groupValues[3] }
         val m = PRICE_NUM.find(s) ?: return null
         val gap = s.substring(0, m.range.first)
         // Only filler allowed between anchor and number: ":", ".", "RS", "₹", "(INCL. OF ALL TAXES)", spaces.
@@ -172,10 +219,18 @@ object LabelParser {
         if (strictUnit && m.groupValues[2].isEmpty() && UNIT_AFTER.containsMatchIn(rest)) return null
         // Number directly followed by a weight unit is a quantity, not a price ("500G")
         if (Regex("""^\s*(?:G|GM|GMS|KG|ML|L|LTR)\b""").containsMatchIn(rest)) return null
+        // Phone / toll-free number: more digit groups follow ("1800 266 0123", "1800-22-6000")
+        if (Regex("""^[\s\-]\d{2,}[\s\-]\d{3,}""").containsMatchIn(rest)) {
+            rejected?.add(m.groupValues[1] to "phone number"); return null
+        }
         val raw = m.groupValues[1]
         val v = (if (Regex("""^\d{1,2},\d{3}""").containsMatchIn(raw)) raw.replace(",", "") else raw.replace(',', '.'))
             .toDoubleOrNull() ?: return null
-        return if (v in 1.0..10000.0) v else null
+        if (v < 1.0 || v > 10000.0) {
+            if (v > 0.0) rejected?.add(raw to "outside ₹1 to ₹10,000")
+            return null
+        }
+        return v
     }
 
     // ── Net quantity ─────────────────────────────────────────────────────────
@@ -208,13 +263,15 @@ object LabelParser {
     fun normalizeQty(s: String): String? {
         val m = QTY.find(fixDigits(s).uppercase().trim()) ?: return null
         val num = m.groupValues[1].replace(',', '.').toDoubleOrNull() ?: return null
-        if (num <= 0 || num > 100000) return null
         val unit = when (m.groupValues[2]) {
             "KG", "KGS", "KILO", "KILOS", "KILOGRAM", "KILOGRAMS" -> "kg"
             "G", "GM", "GMS", "GR", "GRAM", "GRAMS" -> "g"
             "ML", "MLS", "MILLILITRE", "MILLILITRES" -> "ml"
             else -> "L"
         }
+        // A shop pack is between a 1 g / 1 ml sachet and a 50 kg / 50 L sack; anything else is a misread
+        val max = if (unit == "kg" || unit == "L") 50.0 else 50000.0
+        if (num <= 0 || num > max || ((unit == "g" || unit == "ml") && num < 1)) return null
         val n = if (num == Math.floor(num)) num.toLong().toString() else num.toString().trimEnd('0').trimEnd('.')
         return "$n $unit"
     }
@@ -436,8 +493,13 @@ object LabelParser {
     private fun words(s: String) = s.split(" ").filter { it.isNotEmpty() }.size
 
     fun parseBrandAndName(front: List<Line>, back: List<Line>): Pair<Field<String>, Field<String>> {
-        var cands = front.map { it.copy(text = cleanLine(it.text)) }
-            .filter { l ->
+        // OCR spelling fixes first ("BRITANIA" → "BRITANNIA", "Crearn" → "Cream"), so brands are recognised
+        val suspicious = mutableListOf<String>()
+        var cands = front.map { l ->
+            val fix = NameSpell.correctLine(cleanLine(l.text))
+            suspicious += fix.suspicious
+            l.copy(text = fix.text)
+        }.filter { l ->
                 val letters = l.text.count { it.isLetter() }
                 letters >= 2 && letters >= l.text.length / 2 && !FRONT_NOISE.containsMatchIn(l.text.uppercase())
             }
@@ -448,7 +510,7 @@ object LabelParser {
         if (frontBrand != null) {
             brandF = Field(frontBrand, 0.75)
         } else {
-            findKnownBrand(back.joinToString(" ") { it.text })
+            findKnownBrand(back.joinToString(" ") { NameSpell.correctLine(it.text).text })
                 ?.takeIf { it !in AMBIGUOUS_BRANDS }
                 ?.let { brandF = Field(it, 0.45) }
         }
@@ -486,7 +548,9 @@ object LabelParser {
                 .maxByOrNull { it.height }
                 ?.let { text = "$text ${it.text}" }
         }
-        return brandF to Field(titleCase(text), if (hasType(text)) 0.5 else 0.3)
+        // A word that still looks misread ("Exce1") and could not be fixed safely: keep it, but ask to check
+        val unsure = suspicious.any { w -> text.contains(w, ignoreCase = true) }
+        return brandF to Field(titleCase(text), if (unsure) 0.3 else if (hasType(text)) 0.5 else 0.3)
     }
 
     private fun titleCase(s: String) = s.lowercase().split(" ").joinToString(" ") { w ->

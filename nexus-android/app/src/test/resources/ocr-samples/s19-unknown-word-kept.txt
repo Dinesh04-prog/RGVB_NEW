@@ -1,0 +1,19 @@
+# "Rajwadi" is not a dictionary word and nothing in the vocabulary is close: it must stay as read
+id: s19-unknown-word-kept
+expect.mrp: 70
+expect.weight: 50 g
+expect.mfg: 2026-01-06
+expect.exp: 2027-01-05
+expect.brand: Badshah
+expect.name: rajwadi garam masala
+expect.barcode: -
+== photo
+-- latin
+40|BADSHAH
+26|Rajwadi Garam Masala
+== photo
+-- latin
+MRP Rs.7O/-
+NET WT. 5Og e
+MFG.: O6.O1.26
+EXP.: O5.O1.27

@@ -190,6 +190,8 @@ export interface Translation {
 export interface NameMaps {
   learned: WordMap;    // user corrections (localforage)
   inventory: WordMap;  // buildInventoryWordMap(inventory)
+  /** known English words for OCR spelling fixes: buildSpellVocab(inventory) */
+  vocab?: ReadonlySet<string>;
 }
 
 const lookupPhrase = (phrase: string, maps: NameMaps): [string, WordSource] | null => {
@@ -853,6 +855,144 @@ export const learnDroppedWords = (
       if (next === map) next = { ...map };
       next[`!drop:${w}`] = '1';
     }
+  });
+  return next;
+};
+
+// ── Two name fields (Add / Edit popup) ───────────────────────────────────────
+//
+// The popup edits name_eng and name_marathi separately; neither is ever converted from the other.
+// `name` (the display name) = Marathi if present, otherwise English — same as inventory.json.
+
+const hasDevanagari = (s: string) => /[ऀ-ॿ]/.test(s);
+
+/** The two names as the popup shows them. Older items that only have `name` show it in the matching box. */
+export const itemNameFields = (item: { name?: string; name_eng?: string; name_marathi?: string }) => {
+  const name = item.name || '';
+  return {
+    eng: item.name_eng || (name && !hasDevanagari(name) ? name : ''),
+    marathi: item.name_marathi || (hasDevanagari(name) ? name : ''),
+  };
+};
+
+/** Sets one or both names; `name` follows (Marathi first). The other name is never touched. */
+export const withItemNames = <T extends { name: string; name_eng?: string; name_marathi?: string }>(
+  item: T, names: { eng?: string; marathi?: string },
+): T => {
+  const cur = itemNameFields(item);
+  const eng = names.eng ?? cur.eng;
+  const marathi = names.marathi ?? cur.marathi;
+  return { ...item, name_eng: eng, name_marathi: marathi, name: marathi.trim() || eng.trim() };
+};
+
+// ── OCR spelling fixes with the shop's own words ─────────────────────────────
+//
+// The phone already fixes brand and product words it knows (NameSpell.kt). Here the shop's vocabulary is added:
+// every word of the existing item names and brands, the dictionaries above, and corrections the user made
+// before ("!fix:<read>" → "<meant>" in the learned map). A word is changed only when it is not a known word and
+// exactly one known word is close; otherwise it is kept and reported as unsure.
+
+/** Known English words: inventory names and brands, plus the word lists of this file and phonetic.ts. */
+export const buildSpellVocab = (items: { name_eng?: string; brand?: string; full_name_eng?: string }[]): Set<string> => {
+  const vocab = new Set<string>();
+  const add = (s: string | undefined) => {
+    for (const w of (s || '').toLowerCase().split(/[^a-z']+/)) if (w.length >= 3) vocab.add(w);
+  };
+  items.forEach(i => { add(i.name_eng); add(i.brand); add(i.full_name_eng); });
+  [BRAND_MARATHI, PRODUCT_PHRASES, LOANWORDS, HINGLISH_TO_MARATHI].forEach(m => Object.keys(m).forEach(add));
+  [FILLER_WORDS, SOFT_WORDS, TYPE_WORDS, PHARMA_SUFFIXES, MEDICINE_FORMS].forEach(s => s.forEach(add));
+  return vocab;
+};
+
+/** Optimal string alignment distance (adjacent swap = 1). Same as NameSpell.osa on the phone. */
+export const osaDistance = (a: string, b: string): number => {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 0; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+    }
+  }
+  return d[a.length][b.length];
+};
+
+const CHAR_SWAPS: Record<string, string[]> = {
+  '1': ['l', 'i'], l: ['i'], i: ['l'], '0': ['o'], '5': ['s'], '8': ['b'], c: ['e'], e: ['c'], u: ['v'], v: ['u'],
+};
+const SEQ_SWAPS: [string, string][] = [['rn', 'm'], ['vv', 'w'], ['cl', 'd'], ['ii', 'u'], ['nn', 'm']];
+
+const confusionVariants = (w: string): Set<string> => {
+  const step = (s: string) => {
+    const out = new Set<string>();
+    for (const [from, to] of SEQ_SWAPS) {
+      for (let i = s.indexOf(from); i >= 0; i = s.indexOf(from, i + 1)) out.add(s.slice(0, i) + to + s.slice(i + from.length));
+    }
+    [...s].forEach((c, i) => (CHAR_SWAPS[c] || []).forEach(r => out.add(s.slice(0, i) + r + s.slice(i + 1))));
+    return out;
+  };
+  const one = step(w);
+  const all = new Set(one);
+  one.forEach(v => step(v).forEach(x => all.add(x)));
+  return all;
+};
+
+/** The corrected word (lowercase), or null when `w` is known, too short or the fix is not clear. */
+export const spellFixWord = (w: string, vocab: ReadonlySet<string>, learned: WordMap = {}): string | null => {
+  const lw = w.toLowerCase();
+  if (learned[`!fix:${lw}`]) return learned[`!fix:${lw}`];
+  if (vocab.has(lw) || (lw.replace(/[^a-z]/g, '').length < 4) || /^\d+[a-z]{0,3}$/.test(lw)) return null;
+  const viaConfusion = new Set([...confusionVariants(lw)].filter(v => vocab.has(v)));
+  if (viaConfusion.size === 1) return [...viaConfusion][0];
+  if (viaConfusion.size > 1 || /\d/.test(lw)) return null;
+  const max = lw.length >= 8 ? 2 : lw.length >= 5 ? 1 : 0;
+  if (!max) return null;
+  let best: string | null = null;
+  let bestD = Infinity;
+  let tie = false;
+  for (const v of vocab) {
+    if (Math.abs(v.length - lw.length) > max || (v[0] !== lw[0] && !(CHAR_SWAPS[lw[0]] || []).includes(v[0]))) continue;
+    const dist = osaDistance(lw, v);
+    if (dist < bestD) { best = v; bestD = dist; tie = false; } else if (dist === bestD && v !== best) tie = true;
+  }
+  return best && bestD <= max && !tie ? best : null;
+};
+
+/** Fixes OCR spelling word by word, keeping each word's letter case. `unsure` = words that still look misread. */
+export const spellFixEnglish = (text: string, vocab: ReadonlySet<string>, learned: WordMap = {}) => {
+  const changes: [string, string][] = [];
+  const unsure: string[] = [];
+  const out = text.replace(/[A-Za-z0-9']+/g, w => {
+    const fixed = spellFixWord(w, vocab, learned);
+    if (fixed && fixed !== w.toLowerCase()) {
+      changes.push([w, fixed]);
+      const letters = w.replace(/[^A-Za-z]/g, '');
+      return letters.length > 1 && letters === letters.toUpperCase() ? fixed.toUpperCase()
+        : /^[A-Z]/.test(w) ? fixed[0].toUpperCase() + fixed.slice(1) : fixed;
+    }
+    // letters mixed with digit look-alikes ("exce1") that could not be fixed safely
+    if (/[a-z]/i.test(w) && /[015|]/.test(w) && !/^\d+[a-z]{0,3}$/i.test(w) && w.replace(/[^a-z]/gi, '').length >= 3) unsure.push(w);
+    return w;
+  });
+  return { text: out, changes, unsure };
+};
+
+/**
+ * The user corrected a word of a suggested English name before saving ("biscts" → "biscuits"): remember it as
+ * "!fix:biscts" so the same OCR misread is fixed next time. Only same-position words that look alike are learned.
+ */
+export const learnSpellingFixes = (map: WordMap, suggestedEng: string, finalEng: string): WordMap => {
+  const a = suggestedEng.toLowerCase().split(/\s+/).filter(Boolean);
+  const b = finalEng.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!a.length || a.length !== b.length) return map;
+  let next = map;
+  a.forEach((w, i) => {
+    const f = b[i];
+    if (w === f || !/^[a-z0-9']{3,}$/.test(w) || !/^[a-z']{3,}$/.test(f)) return;
+    if (osaDistance(w, f) > Math.max(2, Math.floor(f.length / 3))) return;   // a different word, not a misread
+    if (next === map) next = { ...map };
+    next[`!fix:${w}`] = f;
   });
   return next;
 };

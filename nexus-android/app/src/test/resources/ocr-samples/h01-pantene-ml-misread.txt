@@ -1,0 +1,18 @@
+# held-out (written after the fixes, not tuned): brand lost a letter; "ml" read as "m1"
+id: h01-pantene-ml-misread
+expect.mrp: 199
+expect.weight: 340 ml
+expect.mfg: 2026-04-01
+expect.exp: 2029-03-31
+expect.brand: Pantene
+expect.name: silky smooth care
+expect.barcode: -
+== photo
+-- latin
+44|Pantne
+22|Silky Smooth Care
+== photo
+-- latin
+MRP Rs 199.00 (incl. of all taxes)
+Net Vol 340 m1
+MFG 04/2026 EXP 03/2029

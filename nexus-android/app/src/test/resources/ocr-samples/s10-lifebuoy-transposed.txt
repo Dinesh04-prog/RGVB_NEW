@@ -1,0 +1,19 @@
+# two letters swapped in the brand
+id: s10-lifebuoy-transposed
+expect.mrp: 35
+expect.weight: 100 g
+expect.mfg: 2026-02-01
+expect.exp: 2029-02-01
+expect.brand: Lifebuoy
+expect.name: total
+expect.barcode: -
+== photo
+-- latin
+48|Lifebouy
+22|Total 10
+== photo
+-- latin
+MRP Rs 3S/-
+Net Wt 1OOg
+B.No. A2B114 MFD O2/26
+BEST BEFORE 36 MONTHS FROM MANUFACTURE

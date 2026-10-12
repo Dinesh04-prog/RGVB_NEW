@@ -1,0 +1,21 @@
+# back panel printed in two columns; sorting all lines by height alone mixes the columns
+id: s07-two-columns
+expect.mrp: 120
+expect.weight: 500 g
+expect.mfg: 2026-02-01
+expect.exp: 2027-01-31
+expect.brand: Tata Sampann
+expect.name: toor dal
+expect.barcode: -
+== photo
+-- latin
+40|TATA SAMPANN
+30|Unpolished Toor Dal
+== photo
+-- latin
+14,100,20,260,0.9|M.R.P. (incl. of all taxes)
+14,102,400,200,0.9|Mfd: 02/2026
+14,140,20,200,0.9|Rs. 120.00
+14,141,400,200,0.9|Exp: 01/2027
+14,180,20,200,0.9|Net Wt. 500 g
+14,182,400,260,0.9|Unit price Rs. 0.24/g

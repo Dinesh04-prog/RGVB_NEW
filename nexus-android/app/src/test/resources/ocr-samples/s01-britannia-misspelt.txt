@@ -1,0 +1,21 @@
+# brand and product word misspelt by OCR (one letter lost, i read as l)
+id: s01-britannia-misspelt
+expect.mrp: 30
+expect.weight: 75 g
+expect.mfg: 2026-03-01
+expect.exp: 2026-08-31
+expect.brand: Britannia
+expect.name: good day cashew cookies
+expect.barcode: 8901063142046
+== photo
+-- latin
+40|BRITANIA
+58|Good Day
+24|Cashew Cookles
+== photo
+barcode: 8901063142046 EAN_13
+-- latin
+MRP ₹ 3O/- (Inclusive of all taxes)
+Net Wt: 75 g
+MFD: 03/2026  EXP: 08/2026
+Britannia Industries Limited

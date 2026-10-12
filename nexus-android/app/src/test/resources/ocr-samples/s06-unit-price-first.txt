@@ -1,0 +1,21 @@
+# unit sale price printed above the MRP; l read as I and w read as vv in the product name
+id: s06-unit-price-first
+expect.mrp: 38
+expect.weight: 100 g
+expect.mfg: 2025-08-01
+expect.exp: 2027-07-31
+expect.brand: Everest
+expect.name: turmeric powder
+expect.barcode: -
+== photo
+-- latin
+46|EVEREST
+30|TURMERlC POVVDER
+16|Haldi
+== photo
+-- latin
+USP: ₹ 0.38 per g
+MRP ₹ 38.00
+(incl. of all taxes)
+NET WT 100 g
+MFD: AUG 2025  BB: JUL 2027

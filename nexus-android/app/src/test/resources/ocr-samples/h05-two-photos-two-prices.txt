@@ -1,0 +1,22 @@
+# held-out: each photo reads a different MRP once; the first is kept, the other must be offered as a chip
+id: h05-two-photos-two-prices
+expect.mrp: 65
+expect.mrp_alts: 60
+expect.weight: 200 g
+expect.mfg: 2026-05-01
+expect.exp: 2027-04-30
+expect.brand: Haldiram
+expect.name: navratan
+expect.barcode: -
+== photo
+-- latin
+40|Haldiram
+26|Navratan Mixture
+== photo
+-- latin
+MRP ₹ 65.00
+Net Wt. 200 g
+MFG 05/2026 EXP 04/2027
+== photo
+-- latin
+MRP ₹ 60.00

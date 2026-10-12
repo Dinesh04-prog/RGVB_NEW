@@ -1,0 +1,21 @@
+# foil glare eats one MRP digit on the plain photo; the enhanced copy reads it
+id: s03-parachute-glare
+expect.mrp: 105
+expect.weight: 100 ml
+expect.mfg: 2025-10-01
+expect.exp: 2027-09-30
+expect.brand: Parachute
+expect.name: coconut oil
+expect.barcode: -
+== photo
+-- latin
+40|Parachule
+26|100% Pure Coconut Oil
+== photo
+-- latin
+14,100,20,300,0.55|MRP (Incl. of all taxes) ₹ 1_5.00
+14,140,20,120,0.90|1OO ml
+14,180,20,300,0.88|Mfg: 1O/25  Exp: O9/27
+-- latin enhanced
+14,101,20,300,0.86|MRP (Incl. of all taxes) ₹ 105.00
+14,140,20,120,0.84|1OO ml
