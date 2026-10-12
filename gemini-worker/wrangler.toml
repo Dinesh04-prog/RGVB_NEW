@@ -1,0 +1,30 @@
+# Cloudflare Worker for NexusPOS "Fill from Photos" (free plan). Deploy: see nexus-android/PHOTO_ADD_ITEM.md.
+name = "nexuspos-gemini"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+workers_dev = true
+
+[vars]
+# Free Flash-class vision model. Change it here and run `npx wrangler deploy` (no app rebuild needed).
+GEMINI_MODEL = "gemini-3.5-flash-lite"
+# Scans per day (Pacific time, when the Gemini free quota resets) for all phones together. Keep well under the
+# model's free "requests per day" shown in AI Studio.
+DAILY_CAP = "150"
+# Kill switch: "true" = on. Anything else turns Gemini off for every phone at once (the app reads on the phone only).
+ENABLED = "true"
+
+# Daily scan counter. Replace the id with the one printed by: npx wrangler kv namespace create USAGE
+[[kv_namespaces]]
+binding = "USAGE"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+# 6 scans per minute per phone (counted per Cloudflare location, approximate)
+[[ratelimits]]
+name = "DEVICE_LIMITER"
+namespace_id = "7301"
+
+  [ratelimits.simple]
+  limit = 6
+  period = 60
+
+# Secrets (never in this file): npx wrangler secret put GEMINI_API_KEY / APP_KEY / APP_KEY_PREVIOUS
