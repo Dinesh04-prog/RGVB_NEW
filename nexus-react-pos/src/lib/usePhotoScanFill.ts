@@ -127,8 +127,11 @@ export function usePhotoScanFill<T extends FillableItem>({ item, setItem, invent
   };
 
   const result = s.result;
-  const mrpOptions = result && result.mrp != null && result.mrp_alternates?.length
-    ? [result.mrp, ...result.mrp_alternates.filter(v => v !== result.mrp)] : [];
+  const mrpAlts = result?.alternates?.mrp ?? result?.mrp_alternates ?? [];
+  const mrpOptions = result && result.mrp != null && mrpAlts.length
+    ? [result.mrp, ...mrpAlts.filter(v => v !== result.mrp)] : [];
+  const qtyAlts = result?.alternates?.net_qty ?? [];
+  const qtyOptions = result?.net_qty && qtyAlts.length ? [result.net_qty, ...qtyAlts.filter(v => v !== result.net_qty)] : [];
 
   return {
     available: isAndroidScanAvailable(),
@@ -144,6 +147,13 @@ export function usePhotoScanFill<T extends FillableItem>({ item, setItem, invent
       : '',
     /** MRP values read (chosen first) when the photos disagreed; empty when there was only one */
     mrpOptions,
+    /** pack sizes read about equally well (chosen first); empty when there was only one */
+    qtyOptions,
+    chooseQty: (value: string) => {
+      if (!item) return;
+      setItem({ ...item, net_qty: value });
+      markTouched(['net_qty']);
+    },
     /** Open Food Facts values that disagree with a weak read: offered, never filled */
     suggestions: result?.suggestions ?? {},
     /** merged OCR lines, for the tap-to-pick list */

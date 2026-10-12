@@ -51,6 +51,8 @@ object ScanMerge {
         val warnings: List<String> = emptyList(),
         /** every MRP reading with its score, for the raw scan details */
         val mrpDebug: List<String> = emptyList(),
+        /** other pack sizes read about as well as the chosen one (chips in the popup) */
+        val qtyAlternates: List<String> = emptyList(),
     )
 
     /** One MRP value with all its readings combined. */
@@ -122,6 +124,11 @@ object ScanMerge {
             texts.mapIndexed { i, t -> Cand(parse(t), i + 1) } + Cand(parse(allText), 0)
 
         val (qty, qtyFrom) = pick(perPhoto { LabelParser.parseNetQty(it) })
+        // Other sizes read about as well as the chosen one: offered as chips (the field is then weak)
+        val qtyCands = texts.flatMap { LabelParser.qtyCandidates(it) }
+        val qtyTop = qtyCands.maxOfOrNull { it.confidence } ?: 0.0
+        val qtyAlternates = qtyCands.filter { it.value != qty.value && it.confidence >= qtyTop - CONFLICT_GAP }
+            .mapNotNull { it.value }.distinct().take(3)
         val (mrp, mrpFrom, mrpVotes) = voteMrp(photos, qty.value)
         val dates = texts.map { LabelParser.parseDates(it) } + listOf(LabelParser.parseDates(allText))
         fun dateCands(sel: (Pair<Field<String>, Field<String>>) -> Field<String>) =
@@ -205,7 +212,9 @@ object ScanMerge {
                 (if (sizePenalty(v.value, qty.value) < 0) ", implausible for ${qty.value}" else "") + ")"
         }
 
-        return Merged(mrp, qty, mfg, expChecked, brand, name, devBest, barcode, format, verified, bcConf, bcSource, picked,
-            alternates, warnings, mrpDebug)
+        val qtyChecked = if (qtyAlternates.isNotEmpty()) Field(qty.value, minOf(qty.confidence, WEAK)) else qty
+
+        return Merged(mrp, qtyChecked, mfg, expChecked, brand, name, devBest, barcode, format, verified, bcConf, bcSource, picked,
+            alternates, warnings, mrpDebug, qtyAlternates)
     }
 }

@@ -190,16 +190,34 @@ object LabelParser {
                 }
             }
             if (misread.isNotEmpty()) continue
-            // 3) Weak anchor: currency symbol without "MRP"
+            // 3) Weak anchor: currency symbol without "MRP"; a price badge may put "Rs." and "10/-" on two lines
+            var found = false
             for (m in CURRENCY_ANCHOR.findAll(line)) {
                 val before = line.substring(0, m.range.first)
                 if (NOT_MRP_CONTEXT.containsMatchIn(before.takeLast(25))) continue
-                val num = firstPriceAfter(line.substring(m.range.last + 1), strictUnit = true, rejected = rejected) ?: continue
-                cands += PriceCandidate(num, 0.5 + (if (hasIncl) 0.15 else 0.0) + near(li), li, "currency sign")
+                val rest = line.substring(m.range.last + 1)
+                val num = firstPriceAfter(rest, strictUnit = true, rejected = rejected)
+                if (num != null) {
+                    cands += PriceCandidate(num, 0.5 + (if (hasIncl) 0.15 else 0.0) + near(li), li, "currency sign"); found = true
+                } else if (rest.none { it.isLetterOrDigit() } && li + 1 < lines.size) {
+                    firstPriceAfter(lines[li + 1], allowUnanchoredStart = true, strictUnit = true, rejected = rejected)?.let {
+                        cands += PriceCandidate(it, 0.5 + near(li), li, "currency sign, value on next line"); found = true
+                    }
+                }
+            }
+            if (found) continue
+            // 4) "10/-" is itself an Indian price mark, even without Rs / ₹ / MRP
+            for (m in SLASH_DASH_PRICE.findAll(line)) {
+                if (NOT_MRP_CONTEXT.containsMatchIn(line.substring(0, m.range.first).takeLast(25))) continue
+                val v = m.groupValues[1].toDoubleOrNull() ?: continue
+                if (v < 1.0 || v > 10000.0) { rejected += m.groupValues[1] to "outside ₹1 to ₹10,000"; continue }
+                cands += PriceCandidate(v, 0.55 + near(li), li, "price written as ${m.value.replace(" ", "")}")
             }
         }
         return MrpScan(cands, rejected)
     }
+
+    private val SLASH_DASH_PRICE = Regex("""(?<![\d.,])(\d{1,5}(?:\.\d{1,2})?)\s*/\s*-""")
 
     /** First plausible price in [s]; rejects per-unit prices ("Rs 0.09/g"), phone numbers and impossible values. */
     private fun firstPriceAfter(
@@ -241,8 +259,13 @@ object LabelParser {
     private val NET_ANCHOR = Regex("""NETT?\s*\.?\s*(?:WT|WEIGHT|QTY|QUANTITY|CONTENTS?|VOL(?:UME)?|MASS)|NET\b""")
     private val NUTRITION = Regex("""NUTRI|ENERGY|PROTEIN|FAT|CARBO|SUGARS?\b|SODIUM|KCAL|FIBRE|FIBER|SERVING|CALCIUM|IRON|VITAMIN|CHOLESTEROL""")
 
-    fun parseNetQty(text: String): Field<String> {
-        var best: Field<String> = Field.none()
+    // "20g EXTRA", "FREE 20 g", "+20g", "BONUS 10g", "20g MORE" are offers, not the pack size
+    private val CLAIM_AFTER = Regex("""^\s*(?:FREE|EXTRA|BONUS|MORE)\b""")
+    private val CLAIM_BEFORE = Regex("""(?:FREE|EXTRA|BONUS|\+)\s*$""")
+
+    /** The pack size of every line that has one (first quantity on the line), with its confidence. */
+    fun qtyCandidates(text: String): List<Field<String>> {
+        val out = mutableListOf<Field<String>>()
         for (raw in text.lines()) {
             val line = fixDigits(raw).uppercase()
             val anchored = NET_ANCHOR.containsMatchIn(line)
@@ -250,13 +273,21 @@ object LabelParser {
             for (m in QTY.findAll(line)) {
                 val before = line.substring(0, m.range.first).takeLast(12)
                 if (Regex("""PER\s*$|/\s*$|X\s*$""").containsMatchIn(before)) continue
+                if (CLAIM_AFTER.containsMatchIn(line.substring(m.range.last + 1)) || CLAIM_BEFORE.containsMatchIn(before)) continue
                 val norm = normalizeQty(m.value) ?: continue
-                val conf = if (anchored) 0.9 else 0.55
-                if (conf > best.confidence) best = Field(norm, conf)
+                out += Field(norm, if (anchored) 0.9 else 0.55)
                 break  // first qty on a line is the main one ("1 kg (1000 g)")
             }
         }
-        return best
+        return out
+    }
+
+    /** Best pack size; two different sizes read equally well → kept, but weak (yellow, both offered). */
+    fun parseNetQty(text: String): Field<String> {
+        val cands = qtyCandidates(text)
+        val best = cands.maxByOrNull { it.confidence } ?: return Field.none()
+        val tie = cands.any { it.value != best.value && it.confidence >= best.confidence }
+        return if (tie) Field(best.value, minOf(best.confidence, 0.5)) else best
     }
 
     /** "500gm" → "500 g", "1 Ltr" → "1 L", "1,5kg" → "1.5 kg", "250 ML" → "250 ml". Null if not a quantity. */
@@ -454,13 +485,30 @@ object LabelParser {
 
     private val FRONT_NOISE = Regex(
         """NET\b|\bWT\b|MRP|M\.R\.P|\bRS\b|₹|%|FREE|\bNEW\b|OFFER|PACK\s*OF|\bVEG\b|KCAL|ENERGY|PROTEIN|INGREDIENT|""" +
-        """NUTRI|FSSAI|\bLIC\b|MFD|MFG|\bEXP|WWW|\.COM|@|\bSAVE\b|EXTRA|\bONLY\b|IMPROVED|BEST\b|TRUSTED|""" +
-        """SINCE\s*\d|\bNO\.?\s*1\b|\bWITH\b|CONTAINS|MADE\s*WITH|GOODNESS|HEALTHY|TASTY|DELICIOUS|ZERO|""" +
+        """NUTRI|FSSAI|\bLIC\b|MFD|MFG|\bEXP|WWW|\.COM|@|\bSAVE\b|EXTRA|\bONLY\b|""" +
+        """SINCE\s*\d|\bNO\.?\s*1\b|\bWITH\b|CONTAINS|MADE\s*WITH|""" +
         """GERM|PROTECTION|\bFOR\b|\bAND\b.*\bAND\b|""" +
         // back/side-of-pack text: company lines, storage and usage instructions
         """\bPVT\b|\bLTD\b|LIMITED|MARKETED|MANUFACTURED|\bPACKED\b|CUSTOMER|\bCARE\b|\bPLOT\b|\bROAD\b|""" +
         """\bDIST\b|\bSTORE\b|\bKEEP\b|\bDRY\b|\bPLACE\b|DIRECTION|WARNING|CAUTION|ALLERG|\bUSE\b|BATCH"""
     )
+    /**
+     * Marketing words make a line noise only when the whole line is marketing ("Tasty & Delicious"):
+     * they are also part of brand names ("Tasty Nuts", "Healthy Choice").
+     */
+    private val MARKETING_WORDS = setOf(
+        "TASTY", "DELICIOUS", "HEALTHY", "GOODNESS", "IMPROVED", "BEST", "TRUSTED", "ZERO", "YUMMY", "CRUNCHY",
+        "CRISPY", "SUPER", "FRESH", "RICH", "PURE", "REAL", "TASTE", "QUALITY", "PREMIUM",
+        // glue
+        "&", "AND", "IN", "OF", "THE", "A", "SO", "VERY", "MORE", "TOO",
+    )
+
+    private fun isMarketingOnly(s: String): Boolean {
+        val ws = s.uppercase().split(Regex("""[^A-Z&]+""")).filter { it.isNotEmpty() }
+        return ws.isNotEmpty() && ws.all { it in MARKETING_WORDS } &&
+            ws.any { it in setOf("TASTY", "DELICIOUS", "HEALTHY", "GOODNESS", "IMPROVED", "BEST", "TRUSTED", "ZERO", "YUMMY") }
+    }
+
     private val PRODUCT_WORDS = Regex(
         """BISCUITS?|COOKIES?|OIL|SOAP|SHAMPOO|CONDITIONER|TEA|COFFEE|SALT|POWDER|MASALA|ATTA|FLOUR|DAL|RICE|""" +
         """TOOTHPASTE|PASTE|DETERGENT|NOODLES|GHEE|SUGAR|JAM|SAUCE|KETCHUP|CHIPS|BAR|CREAM|LOTION|WASH|LIQUID|""" +
@@ -501,7 +549,8 @@ object LabelParser {
             l.copy(text = fix.text)
         }.filter { l ->
                 val letters = l.text.count { it.isLetter() }
-                letters >= 2 && letters >= l.text.length / 2 && !FRONT_NOISE.containsMatchIn(l.text.uppercase())
+                letters >= 2 && letters >= l.text.length / 2 && !FRONT_NOISE.containsMatchIn(l.text.uppercase()) &&
+                    !isMarketingOnly(l.text)
             }
 
         // 1) Brand: a known brand on the front beats geometry; then the company line on the back.

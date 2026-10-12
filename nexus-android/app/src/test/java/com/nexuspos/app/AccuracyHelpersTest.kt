@@ -120,6 +120,46 @@ class AccuracyHelpersTest {
         assertEquals("Net Wt 1 2 . 5 g", LabelParser.normalizePriceLine("Net Wt 1 2 . 5 g"))
     }
 
+    // ── Fixes from the Tasty Nuts scan ───────────────────────────────────────
+
+    @Test fun marketingWordsOnlyMakeWholeMarketingLinesNoise() {
+        val (brand, name) = LabelParser.parseBrandAndName(
+            listOf(Line("TASTY NUTS", 50), Line("Shing Bhujia", 32), Line("Tasty & Delicious", 20)), emptyList())
+        assertEquals("Tasty Nuts", brand.value)
+        assertEquals("Shing Bhujia", name.value)
+    }
+
+    @Test fun shortWordsAndWordsBesideFoodAreNotDistanceFixed() {
+        assertEquals("Shing Bhujia", NameSpell.correctLine("Shing Bhujia").text)   // not "Shine"
+        assertNull(NameSpell.correctWord("Pasle"))                                   // 5 letters
+        assertEquals("Moong Dal", NameSpell.correctLine("Moong Dal").text)
+        assertEquals("Cream", NameSpell.correctWord("Crearn"))                       // OCR confusions still undone
+        assertEquals("2-Minute Noodles", NameSpell.correctLine("2-Minute Noodels").text)
+    }
+
+    @Test fun slashDashAndTwoLinePriceBadges() {
+        assertEquals(10.0, LabelParser.parseMrp("Rs.\n10/-").value!!, 0.001)      // badge on two lines
+        assertEquals(10.0, LabelParser.parseMrp("₹\n10/-").value!!, 0.001)
+        assertEquals(10.0, LabelParser.parseMrp("10/-").value!!, 0.001)           // N/- alone
+        assertEquals(10.0, LabelParser.parseMrp("Rs.10/-").value!!, 0.001)
+        assertNull(LabelParser.parseMrp("SAVE 5/-").value)                        // offers are not MRPs
+        assertNull(LabelParser.parseMrp("Rs.\nNet Wt 38 g").value)                // next line is not a price
+    }
+
+    @Test fun weightClaimsAreSkippedAndTiesOffered() {
+        assertEquals("38 g", LabelParser.parseNetQty("20g EXTRA\n38 g").value)
+        assertEquals("200 g", LabelParser.parseNetQty("FREE 20 g\n200 g").value)
+        assertEquals("100 g", LabelParser.parseNetQty("+20g\n100 g").value)
+        val tie = LabelParser.parseNetQty("38 g\n40 g")
+        assertEquals("38 g", tie.value)
+        assertTrue("tie → weak", tie.confidence <= 0.5)
+        val m = ScanMerge.merge(listOf(ScanMerge.Photo(listOf(Line("38 g"), Line("40 g")), emptyList())))
+        assertEquals(listOf("40 g"), m.qtyAlternates)
+        assertTrue(m.netQty.confidence <= 0.55)
+        // An anchored size beats an unanchored one: no chips
+        assertTrue(ScanMerge.merge(listOf(ScanMerge.Photo(listOf(Line("Net Wt 38 g"), Line("40 g")), emptyList()))).qtyAlternates.isEmpty())
+    }
+
     @Test fun impossibleWeightsAreRejected() {
         assertNull(LabelParser.normalizeQty("500 kg"))
         assertNull(LabelParser.normalizeQty("0.5 g"))

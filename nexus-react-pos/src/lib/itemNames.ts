@@ -89,6 +89,7 @@ export const LOANWORDS: WordMap = {
   'anti-dandruff': 'अँटी-डँड्रफ', 'conditioner': 'कंडिशनर', 'hair': 'केसांचे', 'toothbrush': 'टूथब्रश',
   'rusk': 'टोस्ट', 'toast': 'टोस्ट', 'masala munch': 'मसाला मंच', 'munch': 'मंच', 'sandwich': 'सँडविच',
   'chocolatey': 'चॉकलेटी', 'cashew': 'काजू', 'roasted': 'भाजलेले', 'powder': 'पावडर',
+  'tasty': 'टेस्टी', 'nuts': 'नट्स', 'nut': 'नट',
   // medicines and cosmetics
   'tablet': 'टॅबलेट', 'capsule': 'कॅप्सूल', 'syrup': 'सिरप', 'ointment': 'मलम', 'lotion': 'लोशन', 'balm': 'बाम',
   'gel': 'जेल', 'drops': 'ड्रॉप्स', 'spray': 'स्प्रे', 'care': 'केअर', 'body': 'बॉडी', 'face': 'फेस',
@@ -938,15 +939,24 @@ const confusionVariants = (w: string): Set<string> => {
   return all;
 };
 
-/** The corrected word (lowercase), or null when `w` is known, too short or the fix is not clear. */
-export const spellFixWord = (w: string, vocab: ReadonlySet<string>, learned: WordMap = {}): string | null => {
+/** Food / product-type words: an unknown word next to one is likely a product name ("Shing Bhujia"). */
+const FOOD_WORDS = new Set([
+  ...TYPE_WORDS, 'biscuits', 'cookies', 'mixture', 'chivda', 'wafers', 'puffs', 'chakli', 'chikki', 'ladoo', 'barfi',
+  'halwa', 'peda', 'jaggery', 'sevai',
+]);
+
+/**
+ * The corrected word (lowercase), or null when `w` is known, too short or the fix is not clear.
+ * Edit-distance guesses need 6+ letters and are off when `allowDistance` is false (word beside a food word).
+ */
+export const spellFixWord = (w: string, vocab: ReadonlySet<string>, learned: WordMap = {}, allowDistance = true): string | null => {
   const lw = w.toLowerCase();
   if (learned[`!fix:${lw}`]) return learned[`!fix:${lw}`];
   if (vocab.has(lw) || (lw.replace(/[^a-z]/g, '').length < 4) || /^\d+[a-z]{0,3}$/.test(lw)) return null;
   const viaConfusion = new Set([...confusionVariants(lw)].filter(v => vocab.has(v)));
   if (viaConfusion.size === 1) return [...viaConfusion][0];
-  if (viaConfusion.size > 1 || /\d/.test(lw)) return null;
-  const max = lw.length >= 8 ? 2 : lw.length >= 5 ? 1 : 0;
+  if (viaConfusion.size > 1 || /\d/.test(lw) || !allowDistance) return null;
+  const max = lw.length >= 8 ? 2 : lw.length >= 6 ? 1 : 0;
   if (!max) return null;
   let best: string | null = null;
   let bestD = Infinity;
@@ -963,8 +973,12 @@ export const spellFixWord = (w: string, vocab: ReadonlySet<string>, learned: Wor
 export const spellFixEnglish = (text: string, vocab: ReadonlySet<string>, learned: WordMap = {}) => {
   const changes: [string, string][] = [];
   const unsure: string[] = [];
+  const tokens = text.toLowerCase().match(/[a-z0-9']+/g) || [];
+  let idx = -1;
   const out = text.replace(/[A-Za-z0-9']+/g, w => {
-    const fixed = spellFixWord(w, vocab, learned);
+    idx++;
+    const besideFood = FOOD_WORDS.has(tokens[idx - 1] ?? '') || FOOD_WORDS.has(tokens[idx + 1] ?? '');
+    const fixed = spellFixWord(w, vocab, learned, !besideFood);
     if (fixed && fixed !== w.toLowerCase()) {
       changes.push([w, fixed]);
       const letters = w.replace(/[^A-Za-z]/g, '');

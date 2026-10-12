@@ -393,14 +393,27 @@ check('every inventory.json item keeps name = Marathi', inventory.every(i => wit
 const vocab = buildSpellVocab(inventory);
 check('vocab has shop words and brands', vocab.has('masurdal') && vocab.has('britannia') && vocab.has('biscuit'));
 eq('rn read for m (shop word)', spellFixEnglish('Rnasurdal', vocab).text, 'Masurdal');
-eq('one letter lost (brand)', spellFixEnglish('BRITANIA Biscuit', vocab).text, 'BRITANNIA Biscuit');
+eq('one letter lost (brand)', spellFixEnglish('BRITANIA', vocab).text, 'BRITANNIA');
+eq('…but not beside a food word (could be a product name)', spellFixEnglish('BRITANIA Biscuit', vocab).text, 'BRITANIA Biscuit');
 eq('swapped letters', spellFixEnglish('turdla', vocab).text, 'turdal');
 eq('known words untouched', spellFixEnglish('Sugar Tea Masala 250g', vocab).text, 'Sugar Tea Masala 250g');
 eq('unknown word with nothing close is kept', spellFixEnglish('Rajwadi', vocab).text, 'Rajwadi');
 eq('sizes and codes untouched', spellFixEnglish('200g B12 A2B114', vocab).text, '200g B12 A2B114');
 check('a word still looking misread is reported unsure', spellFixEnglish('Zx1kq Tea', vocab).unsure.includes('Zx1kq'));
 eq('osa: swap = 1', osaDistance('noodels', 'noodles'), 1);
-check('a tie is never fixed', spellFixWord('pasle', new Set(['paste', 'parle'])) === null);
+check('a tie is never fixed', spellFixWord('bintor', new Set(['binter', 'bintar'])) === null);
+check('5-letter words are never distance-fixed', spellFixWord('pasle', new Set(['paste'])) === null);
+eq('a word beside a food word is not distance-fixed (Shing ≠ shine)', spellFixEnglish('Shing Bhujia', vocab).text, 'Shing Bhujia');
+eq('OCR confusions are still undone beside food words', spellFixEnglish('Crearn Biscuit', vocab).text, 'Cream Biscuit');
+
+// ── The Tasty Nuts pack (real phone scan gave "tasty sugar 20g") ─────────────
+const tasty = shortBilingualName({ brand: 'Tasty Nuts', productEng: 'Shing Bhujia', netQty: '38 g' }, { ...maps, vocab });
+eq('Tasty Nuts: short English name keeps the brand', tasty.name_eng, 'tasty nuts shing bhujia 38g');
+check('Tasty Nuts: Marathi uses the loanwords', tasty.name_marathi.startsWith('टेस्टी नट्स') && tasty.name_marathi.includes('भुजिया ३८ ग्रॅम'), tasty.name_marathi);
+const tastyFill = fillItemFromScan(blankNew, { isNew: true, touched: new Set() },
+  { ...scanBase, brand: 'Tasty Nuts', name_eng: 'Shing Bhujia', net_qty: '38 g', mrp: 10, barcode: null }, { ...maps, vocab });
+eq('Tasty Nuts: fill', [tastyFill.item.name_eng, tastyFill.item.purchase_price, tastyFill.item.net_qty], ['tasty nuts shing bhujia 38g', 10, '38 g']);
+check('Tasty Nuts: a sound-spelled Marathi word ("shing") asks for a check', tastyFill.nameUnsure);
 // learned corrections: the user fixed a word once → fixed next time
 const learnedFix = learnSpellingFixes({}, 'parle-g glcuo biscuit 250g', 'parle-g gluco biscuit 250g');
 eq('spelling fix learned', learnedFix['!fix:glcuo'], 'gluco');

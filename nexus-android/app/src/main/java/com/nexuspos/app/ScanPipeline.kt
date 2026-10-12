@@ -159,6 +159,7 @@ object ScanPipeline {
         out.put("net_qty", qty ?: JSONObject.NULL)
         out.put("mrp", m.mrp.value ?: JSONObject.NULL)
         out.put("mrp_alternates", JSONArray(m.mrpAlternates))
+        out.put("alternates", JSONObject().put("mrp", JSONArray(m.mrpAlternates)).put("net_qty", JSONArray(m.qtyAlternates)))
         out.put("barcode", barcode ?: JSONObject.NULL)
         out.put("barcodeVerified", m.barcodeVerified)
         out.put("mfg_date", m.mfgDate.value ?: JSONObject.NULL)

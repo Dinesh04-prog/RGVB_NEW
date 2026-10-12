@@ -24,8 +24,10 @@ export interface ProductScanResult {
   source: Partial<Record<ScanField, ScanSource>>;
   offStatus: 'found' | 'not_found' | 'error' | 'skipped' | 'rate_limited';
   photoCount?: number;            // 1–5; photos themselves are never sent to the web app
-  /** other MRP values read (best first): one-tap chips under the MRP field */
+  /** other MRP values read (best first): one-tap chips under the MRP field (older results; see `alternates`) */
   mrp_alternates?: number[];
+  /** other values read for a field (best first): one-tap chips under that field */
+  alternates?: { mrp?: number[]; net_qty?: string[]; name_eng?: string[] };
   /** short English messages for the popup ("check both dates", ignored prices) */
   warnings?: string[];
   /** Open Food Facts values that disagree with a weak OCR read: offered, never filled */

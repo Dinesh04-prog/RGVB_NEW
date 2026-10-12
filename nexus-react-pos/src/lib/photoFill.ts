@@ -118,7 +118,9 @@ export const fillItemFromScan = <T extends FillableItem>(
     item: next,
     filled,
     autoNames: { name_eng: final.eng, name_marathi: final.marathi },
-    nameUnsure: nameFilled && (names.unsure || (scan.confidence?.name_eng ?? 1) < 0.35 || !!spell?.unsure.length),
+    // A Marathi word spelled by sound only (not from the shop's words or dictionaries) always needs a check
+    nameUnsure: nameFilled && (names.unsure || (scan.confidence?.name_eng ?? 1) < 0.35 || !!spell?.unsure.length ||
+      (filled.includes('name_marathi') && names.mrPhonetic.length > 0)),
     spellChanges: spell?.changes ?? [],
   };
 };

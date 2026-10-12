@@ -114,9 +114,9 @@ class ReplayTest {
         println("REPLAY TOTAL (${samples.size} samples): " + fields.joinToString("  ") { "$it ${pass[it]}/${total[it]}" })
 
         // Regression guard. Known misses: s24 brand/name (too damaged to fix safely), h01 weight ("m1") and
-        // name ("Care" is treated as back-panel text), h10 name ("Pasle" is as close to "parle" as to "paste").
-        val min = mapOf("mrp" to 34, "weight" to 33, "mfg" to 34, "exp" to 34, "brand" to 33, "name" to 31,
-            "barcode" to 34, "mrp_alts" to 2)
+        // name ("Care" is treated as back-panel text), h10 name ("Pasle" is short and close to "parle" and "paste").
+        val min = mapOf("mrp" to 35, "weight" to 34, "mfg" to 35, "exp" to 35, "brand" to 34, "name" to 32,
+            "barcode" to 35, "mrp_alts" to 2)
         for (f in fields) assertTrue("$f accuracy dropped: ${pass[f]}/${total[f]} < ${min[f]}", pass[f]!! >= min[f]!!)
     }
 }

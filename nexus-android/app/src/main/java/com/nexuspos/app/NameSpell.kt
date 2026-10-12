@@ -6,8 +6,8 @@ package com.nexuspos.app
  * A word is changed only when
  *  - it is not a known word itself, and
  *  - it becomes a known word by undoing common OCR confusions (rn→m, vv→w, cl→d, 1→l/i, 0→o, 5→s, l↔i, c→e), or
- *  - exactly one known word is within a small edit distance (1 for 5–7 letters, 2 for 8+; swaps count 1),
- *    starting with the same (or an OCR-confusable) letter.
+ *  - exactly one known word is within a small edit distance (1 for 6–7 letters, 2 for 8+; swaps count 1),
+ *    starting with the same (or an OCR-confusable) letter, and the word is not next to a known food word.
  * Anything else is kept as read. The shop's own item names and learned corrections are added on the web side
  * (itemNames.ts), because the inventory lives there.
  */
@@ -65,13 +65,30 @@ object NameSpell {
 
     data class Fix(val text: String, val changes: List<Pair<String, String>>, val suspicious: List<String>)
 
-    /** Corrects each word of [line]; keeps spaces, punctuation and the word's letter case. */
+    private val TOKEN = Regex("""[A-Za-z0-9|'’]+""")
+
+    /** Food / product-type words: an unknown word next to one is likely a product name ("Shing Bhujia", "Moong Dal"). */
+    private val FOOD_WORDS = """
+        bhujia sev namkeen mixture chivda chips wafers puffs biscuit biscuits cookies rusk cake masala dal atta
+        flour besan rava poha rice oil ghee tea coffee salt sugar jaggery honey jam sauce ketchup pickle papad noodles
+        vermicelli sevai chakli chikki ladoo barfi halwa peda soap shampoo cream paste powder
+    """.trim().split(Regex("""\s+""")).toSet()
+
+    /**
+     * Corrects each word of [line]; keeps spaces, punctuation and the word's letter case.
+     * A word right next to a known food word ("Shing Bhujia") is probably a product name the vocabulary does not know:
+     * only OCR confusions are undone there, never an edit-distance guess.
+     */
     fun correctLine(line: String, vocab: Set<String> = VOCAB): Fix {
         val changes = mutableListOf<Pair<String, String>>()
         val suspicious = mutableListOf<String>()
-        val out = Regex("""[A-Za-z0-9|'’]+""").replace(line) { m ->
+        val tokens = TOKEN.findAll(line).map { it.value.lowercase() }.toList()
+        var idx = -1
+        val out = TOKEN.replace(line) { m ->
+            idx++
             val w = m.value
-            val fixed = correctWord(w, vocab)
+            val besideFood = tokens.getOrNull(idx - 1) in FOOD_WORDS || tokens.getOrNull(idx + 1) in FOOD_WORDS
+            val fixed = correctWord(w, vocab, allowDistance = !besideFood)
             when {
                 fixed != null -> { changes += w to fixed; fixed }
                 looksMisread(w) -> { suspicious += w; w }
@@ -90,7 +107,7 @@ object NameSpell {
     }
 
     /** The corrected word in the case style of [w], or null when [w] is known, too short or unclear. */
-    fun correctWord(w: String, vocab: Set<String> = VOCAB): String? {
+    fun correctWord(w: String, vocab: Set<String> = VOCAB, allowDistance: Boolean = true): String? {
         val lower = w.lowercase()
         val n = norm(lower)
         if (n.count { it.isLetter() } < 4) return null
@@ -103,9 +120,9 @@ object NameSpell {
         if (viaConfusion.size == 1) return matchCase(w, viaConfusion.first())
         if (viaConfusion.size > 1) return null
 
-        // 2) Small edit distance to exactly one known word
-        if (n.any { it.isDigit() }) return null
-        val max = when { n.length >= 8 -> 2; n.length >= 5 -> 1; else -> 0 }
+        // 2) Small edit distance to exactly one known word (6+ letters only: short words have too many neighbours)
+        if (!allowDistance || n.any { it.isDigit() }) return null
+        val max = when { n.length >= 8 -> 2; n.length >= 6 -> 1; else -> 0 }
         if (max == 0) return null
         var best: String? = null
         var bestD = Int.MAX_VALUE

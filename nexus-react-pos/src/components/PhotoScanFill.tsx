@@ -72,19 +72,35 @@ export function PhotoScanNotices<T>({ scan, onOpenExisting }: { scan: PhotoScanF
   );
 }
 
-/** "₹45 · ₹40" under the MRP field when the photos gave different prices: one tap switches. */
-export function MrpChoices({ scan, current }: { scan: PhotoScanFill; current: number | undefined }) {
-  if (scan.mrpOptions.length < 2) return null;
+/** One-tap chips under a field when different values were read ("₹45 · ₹40", "38 g · 20 g"). */
+export function ValueChoices<V extends string | number>({ options, current, label, format, onChoose }: {
+  options: V[]; current: V | undefined; label: string; format?: (v: V) => string; onChoose: (v: V) => void;
+}) {
+  if (options.length < 2) return null;
   return (
     <div style={{ marginTop: 4 }}>
-      <div style={{ fontSize: '0.72rem', color: YELLOW_TEXT }}>Different prices were read. Tap the right MRP:</div>
+      <div style={{ fontSize: '0.72rem', color: YELLOW_TEXT }}>{label}</div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 4 }}>
-        {scan.mrpOptions.map(v => (
-          <button key={v} type="button" onClick={() => scan.chooseMrp(v)} style={v === current ? chipActive : chip}>₹{v}</button>
+        {options.map(v => (
+          <button key={String(v)} type="button" onClick={() => onChoose(v)} style={v === current ? chipActive : chip}>
+            {format ? format(v) : String(v)}
+          </button>
         ))}
       </div>
     </div>
   );
+}
+
+/** "₹45 · ₹40" under the MRP field when the photos gave different prices: one tap switches. */
+export function MrpChoices({ scan, current }: { scan: PhotoScanFill; current: number | undefined }) {
+  return <ValueChoices options={scan.mrpOptions} current={current} label="Different prices were read. Tap the right MRP:"
+    format={v => `₹${v}`} onChoose={scan.chooseMrp} />;
+}
+
+/** "38 g · 20 g" under the pack size when two sizes were read equally well. */
+export function QtyChoices({ scan, current }: { scan: PhotoScanFill; current: string | undefined }) {
+  return <ValueChoices options={scan.qtyOptions} current={current} label="Different sizes were read. Tap the right one:"
+    onChoose={scan.chooseQty} />;
 }
 
 /** An Open Food Facts value that disagrees with what the photo read: shown, used only on tap. */

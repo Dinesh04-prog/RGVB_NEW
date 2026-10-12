@@ -15,7 +15,7 @@ import type { CartItem, Receipt } from "./lib/db";
 import { translateHinglishToMarathi, transliterateDevanagariToLatin, normalizeForSearch, HINGLISH_TO_MARATHI, parseUserQuery, scoreCandidate } from "./lib/phonetic";
 import { itemNameFields, makeSearchKey, withItemNames } from "./lib/itemNames";
 import { usePhotoScanFill } from "./lib/usePhotoScanFill";
-import { PhotoScanButton, PhotoScanNotices, PhotoScanDebug, MrpChoices, ScanSuggestion } from "./components/PhotoScanFill";
+import { PhotoScanButton, PhotoScanNotices, PhotoScanDebug, MrpChoices, QtyChoices, ScanSuggestion } from "./components/PhotoScanFill";
 
 interface InventoryItem {
   id: string;
@@ -3258,6 +3258,7 @@ export default function App() {
                   onChange={(e) => { photoScan.edited('net_qty'); setInventoryEditItem({ ...inventoryEditItem, net_qty: e.target.value }); }}
                   onKeyDown={editModalKeyDown}
                 />
+                <QtyChoices scan={photoScan} current={inventoryEditItem.net_qty} />
                 <ScanSuggestion scan={photoScan} field="net_qty" label="Suggested size" />
               </div>
             )}

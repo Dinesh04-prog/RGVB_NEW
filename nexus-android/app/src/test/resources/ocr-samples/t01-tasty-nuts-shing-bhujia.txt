@@ -1,0 +1,41 @@
+# SYNTHETIC — NOT REAL OCR. Written from the diagnosis of a real phone scan
+# ("Tasty Nuts Shing Bhujia 38 g Rs.10/-", 3 photos; the phone gave "tasty sugar 20g", no MRP).
+# To replace with the real read: in the app, Add / Edit popup → Show raw scan details → 📋 Copy details,
+# then paste each photo's "OCR Latin" lines under "-- latin" (drop the "[h.. c..]" prefixes or turn them into
+# "h|text"), keep the expect.* lines, and delete these SYNTHETIC header lines.
+#
+# What this sample exercises:
+#  - "TASTY NUTS" is the brand line; "tasty" must not make the line count as marketing noise
+#  - the price badge is "Rs." on one line and "10/-" on the next (no "MRP" word on the front)
+#  - "20g EXTRA" claim on the front must not be read as the pack size; "38 g" is
+#  - "Shing" must not be "corrected" to "shine" (it sits next to the food word "Bhujia")
+#  - the back has the ingredients (with "Sugar") and a misread net weight ("38 9")
+id: t01-tasty-nuts-shing-bhujia
+expect.mrp: 10
+expect.weight: 38 g
+expect.mfg: 2026-08-01
+expect.exp: 2026-11-30
+expect.brand: Tasty Nuts
+expect.name: shing bhujia
+expect.barcode: -
+== photo
+-- latin
+50,40,60,420,0.86|TASTY NUTS
+32,110,80,380,0.81|Shing Bhujia
+40,200,40,90,0.78|Rs.
+60,245,40,140,0.83|10/-
+22,330,300,200,0.80|20g EXTRA
+18,400,300,120,0.84|38 g
+-- devanagari
+30,150,80,300,0.70|शिंग भुजिया
+== photo
+-- latin
+14,40,20,520,0.80|Ingredients: Gram Flour, Edible Vegetable Oil,
+14,60,20,520,0.80|Moth Dal, Salt, Sugar, Spices & Condiments
+26,120,20,160,0.75|Sugar
+14,200,20,300,0.55|Net Wt. 38 9
+== photo
+-- latin
+14,40,20,300,0.70|PKD: 08/2026
+14,80,20,300,0.70|USE BY: 11/2026
+14,120,20,300,0.60|B.No. TN2208
