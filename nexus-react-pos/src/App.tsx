@@ -574,17 +574,17 @@ export default function App() {
     });
   };
 
-  const deleteInventoryItem = async () => {
-    if (!inventoryEditItem) return;
-    const itemName = inventoryEditItem.name_marathi || inventoryEditItem.name || "this item";
+  const deleteInventoryItem = async (target: InventoryItem | null = inventoryEditItem) => {
+    if (!target) return;
+    const itemName = target.name_marathi || target.name || "this item";
     if (!confirm(`Delete "${itemName}" from inventory? This cannot be undone.`)) return;
-    const newInv = inventory.filter(i => i.id !== inventoryEditItem.id);
+    const newInv = inventory.filter(i => i.id !== target.id);
     // Always update local state immediately
     setInventory(newInv);
     await localforage.setItem('custom_inventory', newInv);
     setFuse(new Fuse(newInv, { keys: [{ name: "search_key", weight: 3 }, { name: "name_marathi", weight: 1.5 }, { name: "name", weight: 1 }, { name: "name_eng", weight: 1 }, { name: "brand", weight: 1 }, { name: "net_qty", weight: 0.5 }, { name: "full_name_eng", weight: 0.3 }], threshold: 0.45, ignoreLocation: true, distance: 300, minMatchCharLength: 2, shouldSort: true, includeScore: true }));
     // Best-effort Firebase sync
-    try { await removeInventoryItemFromCloud(inventoryEditItem.id); } catch (err) { console.error("Firebase sync failed:", err); }
+    try { await removeInventoryItemFromCloud(target.id); } catch (err) { console.error("Firebase sync failed:", err); }
     await syncInventoryToXlsx(newInv);
     setInventoryEditItem(null);
   };
@@ -1919,36 +1919,61 @@ export default function App() {
     const price = s.price || 0;
     const stock = s.stock_quantity ?? s.stock_qty ?? 0;
     const hasDiscount = price > 0 && mrp > 0 && price < mrp;
+    const discountPct = hasDiscount ? Math.round((1 - price / mrp) * 100) : 0;
     const isLowStock = stock < 10;
     const marathiName = s.name_marathi || s.name;
     const engName = formatName(s.name_eng || "");
     const isFav = favoriteIds.has(s.id);
+    const hasMeta = !!(s.brand || s.barcode || s.search_key || s.expiry_date);
     return (
       <div key={s.id} className="kirana-card" onClick={() => setInventoryEditItem(s)}>
-        <div
-          onClick={(e) => { e.stopPropagation(); toggleFavorite(s.id); }}
-          style={{ fontSize: '1.3rem', cursor: 'pointer', color: isFav ? '#F59E0B' : '#D1D5DB', alignSelf: 'flex-start', lineHeight: 1, flexShrink: 0, userSelect: 'none' }}
-        >
-          {isFav ? '★' : '☆'}
-        </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 'bold', fontSize: '1.12rem', fontFamily: '"Noto Sans Devanagari", sans-serif', lineHeight: 1.3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: '#1C1917' }}>{marathiName}</div>
-          {engName && <div style={{ fontSize: '0.82rem', color: '#57534E', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{engName}</div>}
-          {s.brand && <div style={{ color: '#0a3d62', fontWeight: 'bold', fontSize: '0.88rem' }}>{s.brand}</div>}
-          <div style={{ color: '#9ca3af', fontSize: '0.68rem', marginTop: '1px' }}>({s.unit}){s.net_qty ? ` · ${s.net_qty}` : ''} · {s.id}</div>
-        </div>
-        <div className="kirana-vals">
-          <div style={{ fontWeight: 'bold', color: '#DC2626', fontSize: '0.88rem', textDecoration: hasDiscount ? 'line-through' : 'none' }}>
-            {mrp ? `₹${mrp}` : '—'}
+        <div className="kirana-top">
+          <div className="kirana-actions">
+            <button type="button" className={`kirana-icon-btn fav${isFav ? ' on' : ''}`} aria-label="Favourite"
+              onClick={(e) => { e.stopPropagation(); toggleFavorite(s.id); }}>
+              {isFav ? '★' : '☆'}
+            </button>
+            <button type="button" className="kirana-icon-btn" aria-label="Edit"
+              onClick={(e) => { e.stopPropagation(); setInventoryEditItem(s); }}>✏️</button>
+            <button type="button" className="kirana-icon-btn danger" aria-label="Delete"
+              onClick={(e) => { e.stopPropagation(); deleteInventoryItem(s); }}>🗑</button>
           </div>
-          <div style={{ fontWeight: 'bold', color: '#16A34A', fontSize: '0.9rem' }}>
-            ₹{price}
-          </div>
-          <div style={{ fontWeight: 'bold', color: isLowStock ? '#DC2626' : '#9CA3AF', fontSize: '0.88rem' }}>
-            {stock}
-            {isLowStock && <div style={{ fontSize: '0.6rem', color: '#DC2626' }}>⚠ कमी</div>}
+          <div className="kirana-names">
+            <div className="kirana-name-mr">{marathiName}</div>
+            {engName && engName !== marathiName && <div className="kirana-name-en">{engName}</div>}
           </div>
         </div>
+        <div className="kirana-stats">
+          <div className="kirana-stat sale">
+            <div className="kirana-stat-label">Sale Rate</div>
+            <div className="kirana-stat-value">₹{price}{hasDiscount && <span className="kirana-discount-badge">{discountPct}% सूट</span>}</div>
+          </div>
+          <div className="kirana-stat">
+            <div className="kirana-stat-label">MRP</div>
+            <div className="kirana-stat-value"><span className={hasDiscount ? 'struck' : undefined}>{mrp ? `₹${mrp}` : '—'}</span></div>
+          </div>
+          <div className={`kirana-stat${isLowStock ? ' low' : ''}`}>
+            <div className="kirana-stat-label">Stock</div>
+            <div className="kirana-stat-value">{stock} {s.unit}</div>
+            {isLowStock && <div className="kirana-low-note">⚠ कमी</div>}
+          </div>
+          <div className="kirana-stat">
+            <div className="kirana-stat-label">Unit</div>
+            <div className="kirana-stat-value">{s.unit || '—'}</div>
+          </div>
+          <div className="kirana-stat">
+            <div className="kirana-stat-label">Pack size</div>
+            <div className="kirana-stat-value">{s.net_qty || '—'}</div>
+          </div>
+        </div>
+        {hasMeta && (
+          <div className="kirana-meta">
+            {s.brand && <span><b>{s.brand}</b></span>}
+            {s.barcode && <span>Barcode: {s.barcode}</span>}
+            {s.search_key && <span>Code: {s.search_key}</span>}
+            {s.expiry_date && <span>Expiry: {s.expiry_date}</span>}
+          </div>
+        )}
       </div>
     );
   };
@@ -2052,20 +2077,40 @@ export default function App() {
             .mobile-cart-card { display: block; }
             .desktop-cart-table { display: none; }
 
-            /* Kirana inventory columns — narrower so they fit on 360 px screens */
-            .kirana-vals { grid-template-columns: 58px 62px 52px; }
-            .kirana-col-header { grid-template-columns: 58px 62px 52px; }
-
             .reports-profit { font-size: 2.5rem; }
 
             .modal-overlay { padding: 10px; }
         }
 
-        .kirana-card { background: white; border-radius: 12px; border: 1px solid #E7E5E4; box-shadow: 0 2px 8px rgba(0,0,0,0.04); margin-bottom: 8px; display: flex; align-items: center; padding: 10px 14px; gap: 10px; cursor: pointer; }
+        /* Inventory cards — stacked rows so names and values are never cut */
+        .kirana-list { display: grid; grid-template-columns: 1fr; gap: 8px; margin-bottom: 8px; }
+        .kirana-card { background: white; border-radius: 12px; border: 1px solid #E7E5E4; box-shadow: 0 2px 8px rgba(0,0,0,0.04); display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; cursor: pointer; min-width: 0; }
         .kirana-card:hover { background: #fafafa; }
-        .kirana-col-header { display: grid; grid-template-columns: 75px 75px 75px; text-align: center; flex-shrink: 0; }
-        .kirana-vals { display: grid; grid-template-columns: 75px 75px 75px; text-align: center; flex-shrink: 0; }
-        .kirana-discount-badge { background: #16A34A; color: white; font-size: 0.6rem; font-weight: bold; padding: 1px 5px; border-radius: 999px; }
+        .kirana-top { display: flow-root; } /* buttons float right; long names wrap under them at full width */
+        .kirana-names { min-width: 0; }
+        .kirana-name-mr { font-weight: bold; font-size: 1.1rem; font-family: "Noto Sans Devanagari", sans-serif; line-height: 1.35; color: #1C1917; overflow-wrap: anywhere; word-break: break-word; }
+        .kirana-name-en { font-size: 0.84rem; color: #6B7280; line-height: 1.3; margin-top: 2px; overflow-wrap: anywhere; word-break: break-word; }
+        .kirana-actions { float: right; display: flex; gap: 4px; margin: 0 0 4px 8px; }
+        .kirana-icon-btn { width: 40px; height: 40px; border-radius: 10px; border: 1px solid #E5E7EB; background: #F8FAFC; color: #0a3d62; font-size: 1.05rem; line-height: 1; display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; user-select: none; }
+        .kirana-icon-btn.fav { font-size: 1.3rem; color: #D1D5DB; }
+        .kirana-icon-btn.fav.on { color: #F59E0B; }
+        .kirana-icon-btn.danger { color: #DC2626; border-color: #FECACA; background: #FEF2F2; }
+        .kirana-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+        .kirana-stat { background: #F8FAFC; border: 1px solid #EEF2F7; border-radius: 8px; padding: 5px 7px; min-width: 0; }
+        .kirana-stat.sale { background: #F0FDF4; border-color: #DCFCE7; }
+        .kirana-stat.low { background: #FEF2F2; border-color: #FECACA; }
+        .kirana-stat-label { font-size: 0.62rem; font-weight: bold; text-transform: uppercase; letter-spacing: 0.04em; color: #6B7280; }
+        .kirana-stat-value { font-weight: bold; font-size: 1rem; color: #0a3d62; line-height: 1.3; overflow-wrap: anywhere; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+        .kirana-stat.sale .kirana-stat-value { color: #16A34A; }
+        .kirana-stat.low .kirana-stat-value { color: #DC2626; }
+        .kirana-stat-value .struck { text-decoration: line-through; color: #9CA3AF; }
+        .kirana-low-note { font-size: 0.62rem; font-weight: bold; color: #DC2626; }
+        .kirana-meta { font-size: 0.74rem; color: #6B7280; display: flex; flex-wrap: wrap; gap: 2px 12px; overflow-wrap: anywhere; }
+        .kirana-meta b { color: #0a3d62; }
+        .kirana-discount-badge { background: #16A34A; color: white; font-size: 0.6rem; font-weight: bold; padding: 1px 5px; border-radius: 999px; white-space: nowrap; }
+        @media (min-width: 768px) {
+            .kirana-list { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px; }
+        }
         .kirana-empty { text-align: center; margin-top: 3rem; font-family: "Noto Sans Devanagari", sans-serif; color: #78716C; }
 
         #printReceiptArea { display: none; }
@@ -2596,28 +2641,19 @@ export default function App() {
               </div>
             </div>
             <div>
-              {/* Column header */}
-              <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '2px 14px 6px 0' }}>
-                <div className="kirana-col-header">
-                  <span style={{ color: '#DC2626', fontWeight: 'bold', fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>MRP</span>
-                  <span style={{ color: '#16A34A', fontWeight: 'bold', fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Sale</span>
-                  <span style={{ color: '#9CA3AF', fontWeight: 'bold', fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Stock</span>
-                </div>
-              </div>
-
               {/* Favourites section */}
               {favFilteredStock.length > 0 && (
                 <div>
                   <div style={{ fontSize: '0.72rem', fontWeight: 'bold', color: '#F59E0B', padding: '2px 4px 6px', display: 'flex', alignItems: 'center', gap: '4px', letterSpacing: '0.04em' }}>
                     ★ FAVOURITES
                   </div>
-                  {favFilteredStock.map(s => renderInventoryCard(s))}
+                  <div className="kirana-list">{favFilteredStock.map(s => renderInventoryCard(s))}</div>
                   <div style={{ borderBottom: '2px dashed #E7E5E4', margin: '4px 0 12px' }} />
                 </div>
               )}
 
               {/* Regular items */}
-              {pagedStock.map(s => renderInventoryCard(s))}
+              <div className="kirana-list">{pagedStock.map(s => renderInventoryCard(s))}</div>
             </div>
 
             {/* Pagination Controls */}
@@ -3070,7 +3106,7 @@ export default function App() {
                 <button style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: '1.2rem', lineHeight: 1 }} onClick={() => setInventoryEditItem(null)}>✕</button>
                 {inventory.find(i => i.id === inventoryEditItem.id) && (
                   <button
-                    onClick={deleteInventoryItem}
+                    onClick={() => deleteInventoryItem()}
                     style={{ border: 'none', background: '#dc3545', color: 'white', cursor: 'pointer', fontSize: '0.7rem', fontWeight: 'bold', borderRadius: '4px', padding: '3px 8px', lineHeight: 1.4 }}
                   >
                     DELETE
