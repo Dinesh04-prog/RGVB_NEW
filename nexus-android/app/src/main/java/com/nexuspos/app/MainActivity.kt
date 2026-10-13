@@ -4,6 +4,8 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Message
@@ -18,6 +20,7 @@ import androidx.core.content.ContextCompat
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewClientCompat
 import org.json.JSONObject
+import java.io.File
 
 class MainActivity : AppCompatActivity() {
 
@@ -28,6 +31,15 @@ class MainActivity : AppCompatActivity() {
     private val productScanLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
         if (res.resultCode == RESULT_OK) deliverScanResult()
         else webView.evaluateJavascript("window.onProductScanCancel && window.onProductScanCancel()", null)
+    }
+
+    // Web <input type="file">: the item picture box (camera or gallery) and the Excel import
+    private var fileCallback: ValueCallback<Array<Uri>>? = null
+    private val takePictureLauncher = registerForActivityResult(ActivityResultContracts.TakePicturePreview()) { bmp ->
+        finishFileChooser(bmp?.let { savePickedPhoto(it) })
+    }
+    private val getContentLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        finishFileChooser(uri)
     }
 
     companion object {
@@ -162,6 +174,30 @@ class MainActivity : AppCompatActivity() {
                 return true
             }
 
+            // <input type="file">: capture + image → camera (small preview picture; the web app shrinks it to
+            // 240 px anyway), otherwise the system picker. Without this, file inputs do nothing in the app.
+            override fun onShowFileChooser(
+                view: WebView, callback: ValueCallback<Array<Uri>>, params: FileChooserParams
+            ): Boolean {
+                fileCallback?.onReceiveValue(null)
+                fileCallback = callback
+                val accept = params.acceptTypes.map { it.trim() }.filter { it.isNotEmpty() }
+                val imagesOnly = accept.isNotEmpty() && accept.all { it.startsWith("image/") }
+                val mime = if (accept.size == 1 && accept[0].contains('/')) accept[0] else if (imagesOnly) "image/*" else "*/*"
+                if (imagesOnly && params.isCaptureEnabled) {
+                    try { takePictureLauncher.launch(null); return true }
+                    catch (e: Exception) { Log.w(TAG, "Camera picker unavailable: ${e.javaClass.simpleName}") }
+                }
+                return try {
+                    getContentLauncher.launch(mime)
+                    true
+                } catch (e: Exception) {
+                    Log.w(TAG, "File picker unavailable: ${e.javaClass.simpleName}")
+                    fileCallback = null
+                    false
+                }
+            }
+
             // Grant camera / microphone to web app automatically (already requested at OS level)
             override fun onPermissionRequest(request: PermissionRequest?) {
                 request?.grant(request.resources)
@@ -253,6 +289,23 @@ class MainActivity : AppCompatActivity() {
 })();
         """.trimIndent()
         webView.evaluateJavascript("javascript:$js", null)
+    }
+
+    // ── File inputs ──────────────────────────────────────────────────────────
+
+    private fun finishFileChooser(uri: Uri?) {
+        fileCallback?.onReceiveValue(if (uri != null) arrayOf(uri) else null)
+        fileCallback = null
+    }
+
+    /** Camera preview picture → a JPEG file the WebView can read. */
+    private fun savePickedPhoto(bmp: Bitmap): Uri? = try {
+        val file = File(cacheDir, "picked_photo.jpg")
+        file.outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 92, it) }
+        Uri.fromFile(file)
+    } catch (e: Exception) {
+        Log.w(TAG, "Could not save the picked photo: ${e.message}")
+        null
     }
 
     // ── Add item from photos ─────────────────────────────────────────────────

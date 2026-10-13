@@ -239,6 +239,18 @@ const f2c = fillItemFromScan(engOnly, { isNew: false, touched: new Set() }, scan
 eq('edit: English-only item keeps English, gets Marathi, name becomes Marathi',
   [f2c.item.name_eng, f2c.item.name_marathi, f2c.item.name], ['sugar', 'पारले-जी ग्लुको बिस्किट २५० ग्रॅम', 'पारले-जी ग्लुको बिस्किट २५० ग्रॅम']);
 
+// Front-photo thumbnail: filled only when the item has no picture, never over the user's own
+const thumb = 'data:image/jpeg;base64,/9j/AAAA';
+const scanPic: ProductScanResult = { ...scanFull, image: thumb };
+const f2d = fillItemFromScan(blankNew, { isNew: true, touched: new Set() }, scanPic, maps);
+check('picture: empty item gets the thumbnail', f2d.item.image === thumb && f2d.filled.includes('image'));
+const f2e = fillItemFromScan({ ...existing, image: 'data:image/jpeg;base64,MINE' }, { isNew: false, touched: new Set() }, scanPic, maps);
+check('picture: saved picture kept', f2e.item.image === 'data:image/jpeg;base64,MINE' && !f2e.filled.includes('image'));
+const f2f = fillItemFromScan(blankNew, { isNew: true, touched: new Set(['image']) }, scanPic, maps);
+check('picture: removed in this popup → not filled again', !f2f.item.image);
+check('picture: no thumbnail → no image key', !('image' in fillItemFromScan(blankNew, { isNew: true, touched: new Set() }, { ...scanFull, image: null }, maps).item));
+check('details: thumbnail size only, never the data', formatScanDetails(scanPic).includes('thumbnail: ') && !formatScanDetails(scanPic).includes('base64'));
+
 const typed = { ...blankNew, name: 'साखर', name_marathi: 'साखर', barcode: '123' };
 const f3 = fillItemFromScan(typed, { isNew: true, touched: new Set(['name_marathi', 'barcode', 'unit']) }, scanFull, maps);
 eq('typed values never overwritten', [f3.item.name, f3.item.name_marathi, f3.item.barcode, f3.item.unit], ['साखर', 'साखर', '123', 'kg']);

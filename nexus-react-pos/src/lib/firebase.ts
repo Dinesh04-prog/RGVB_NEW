@@ -24,6 +24,7 @@ export interface InventoryItem {
   expiry_date?: string;  // ISO yyyy-MM-dd
   mfg_date?: string;     // ISO yyyy-MM-dd
   full_name_eng?: string; // long name read from the pack (search only; name/name_eng hold the short name)
+  image?: string;        // small JPEG data URL (≤ 25 KB), never undefined in Firestore (see lib/itemImage.ts)
 }
 
 export interface ReviewSession {

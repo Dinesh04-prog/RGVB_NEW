@@ -79,7 +79,7 @@ Bill numbers follow format `AA-DDMM-###` (store prefix + date + daily counter).
 
 ### 2. INVENTORY (📦 यादी)
 Excel import/export (xlsx), manual CRUD, stock tracking, barcode scan for lookup.
-Each item renders as a Kirana-style card showing: Marathi name, English name, brand (blue), unit, MRP, selling price (green), stock count. Discount badge "X% सूट" shown when `price < purchase_price`. Red "कमी साठा" alert when `stock_quantity < 10`. Tap any card to open the edit modal.
+Items render as product tiles, 3 per row at every width (`src/components/InventoryTile.tsx`, shared with the Owner app): picture (`image`, a ≤ 25 KB JPEG data URL, or a tinted letter placeholder), one name (Marathi, else English), pack size / unit, `SR` (sale rate = `price`) and `PR` in red (`purchase_price`), and a green outlined "Stock N" block that turns red under 10. Star and delete sit on the picture's corners; tap the tile to open the edit modal, which has the picture box (`ItemImageField.tsx`, no Firebase Storage).
 
 ### 3. REPORTS (📊 अहवाल)
 Profit summary, full JSON backup/restore.
@@ -190,7 +190,7 @@ fuse.search(kiranaQuery, { limit: 20 })
 3. **Marathi first in Stock Lookup** — all UI labels in Devanagari
 4. **Bilingual search** — Fuse.js searches Marathi, English, brand, and search_key simultaneously
 5. **Voice fallback** — text search must always work if voice is unavailable
-6. **Discount display** — show % badge when `price < purchase_price`
+6. **Item pictures stay tiny** — `image` is ≤ 240 px and ≤ 25 KB (`src/lib/itemImage.ts`); remove the key instead of writing undefined to Firestore
 7. **Low stock alert** — red "कमी साठा" when `stock_quantity < 10`
 8. **Max 20 results** — cap Stock Lookup to keep UI fast
 9. **Touch targets** — all interactive elements minimum 48px height

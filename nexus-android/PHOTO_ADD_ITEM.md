@@ -35,7 +35,9 @@ Add / Edit popup → "📷 Fill from Photos"                   PhotoScanFill.tsx
 **Bridge result** (`ProductScanResult` in `src/lib/androidScan.ts`): `name_eng, name_marathi, brand, unit, net_qty,
 mrp, mrp_alternates[], alternates{name_eng, net_qty, mrp}, barcode, barcodeVerified, mfg_date, expiry_date,
 confidence{}, source{} (mlkit-ocr / mlkit-barcode / gemini / openfoodfacts per field), offStatus, geminiStatus,
-photoCount, warnings[], suggestions{barcode}, recognised[], debug`. Photos and thumbnails are **not** sent to the web app.
+photoCount, image, warnings[], suggestions{barcode}, recognised[], debug`. The photos are **not** sent to the web app;
+`image` is one thumbnail of photo 1 (front), a JPEG data URL of at most 240 px and 25 KB (`ScanThumbnail.kt`), filled into
+the item's picture only when it has none.
 
 ### Merging photos (ScanMerge.kt)
 * **Barcode:** the first photo whose ML Kit barcode passes the EAN/UPC checksum. Otherwise checksum-valid digits

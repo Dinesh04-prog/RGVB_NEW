@@ -39,7 +39,8 @@ import java.util.concurrent.TimeoutException
  *   Open Food Facts (free): one lookup for a checksum-valid barcode
  *   SourceMerge: Gemini first when sure, cross-checked with OCR and Open Food Facts (see SourceMerge.kt)
  *
- * Photos are not returned to the web app; only text fields and raw debug text.
+ * Photos are not returned to the web app; only text fields, raw debug text and one ≤ 25 KB thumbnail of
+ * photo 1 (ScanThumbnail) for the inventory tile.
  */
 object ScanPipeline {
 
@@ -171,6 +172,10 @@ object ScanPipeline {
         out.put("offStatus", offStatus)
         out.put("geminiStatus", gemini.status)
         out.put("photoCount", photos.size)
+        // Front photo (photo 1) as a ≤ 25 KB thumbnail for the inventory tile; the photos themselves stay here
+        val tThumb = System.currentTimeMillis()
+        out.put("image", photos.firstOrNull()?.let { ScanThumbnail.fromPhoto(it) } ?: JSONObject.NULL)
+        val thumbMs = System.currentTimeMillis() - tThumb
         val warnings = m.warnings.toMutableList()
         val mfg = r.mfgDate.value
         val exp = r.expiryDate.value
@@ -196,7 +201,7 @@ object ScanPipeline {
             .put("gemini", JSONObject().put("status", gemini.status).put("model", gemini.model ?: JSONObject.NULL)
                 .put("ms", gemini.ms).put("raw", gemini.raw ?: JSONObject.NULL).put("problems", JSONArray(gemini.problems)))
             .put("openFoodFacts", offDebug ?: JSONObject.NULL)
-            .put("timingsMs", JSONObject().put("photos", t1 - t0).put("total", System.currentTimeMillis() - t0)))
+            .put("timingsMs", JSONObject().put("photos", t1 - t0).put("thumbnail", thumbMs).put("total", System.currentTimeMillis() - t0)))
         return out
     }
 

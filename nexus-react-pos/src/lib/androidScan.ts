@@ -24,6 +24,8 @@ export interface ProductScanResult {
   source: Partial<Record<ScanField, ScanSource>>;
   offStatus: 'found' | 'not_found' | 'error' | 'skipped' | 'rate_limited';
   photoCount?: number;            // 1–5; photos themselves are never sent to the web app
+  /** front photo (photo 1) as a JPEG data URL, ≤ 240 px and ≤ 25 KB, for the inventory tile; null when it failed */
+  image?: string | null;
   /** other MRP values read (best first): one-tap chips under the MRP field (older results; see `alternates`) */
   mrp_alternates?: number[];
   /** other values read for a field (best first): one-tap chips under that field */
@@ -131,7 +133,7 @@ const FIELDS: ScanField[] = ['name_eng', 'name_marathi', 'brand', 'net_qty', 'mr
 const NL = '\n';
 const photoLabel = (n: number | undefined) => (n == null ? '-' : n === 0 ? 'all photos' : `photo ${n}`);
 
-/** Plain-text dump of a scan for copy/paste when tuning the parser. Photos are not included. */
+/** Plain-text dump of a scan for copy/paste when tuning the parser. Photos (and the thumbnail) are not included. */
 export const formatScanDetails = (r: ProductScanResult): string => {
   const d = r.debug || {};
   const block = (title: string, text?: string) => `--- ${title} ---${NL}${text?.trim() ? text : '(none)'}`;
@@ -157,6 +159,7 @@ export const formatScanDetails = (r: ProductScanResult): string => {
     out.push(block('MRP READINGS (best first)', [...(d.mrpReadings || []),
       ...(r.mrp_alternates?.length ? [`alternates offered: ${r.mrp_alternates.map(v => `₹${v}`).join(', ')}`] : [])].join(NL)));
   }
+  out.push(`thumbnail: ${r.image ? `${(r.image.length / 1024).toFixed(1)} KB` : 'none'}`);
   if (r.warnings?.length) out.push(block('WARNINGS', r.warnings.join(NL)));
   const alt = r.alternates || {};
   const altLines = (['name_eng', 'net_qty', 'mrp'] as const).filter(k => alt[k]?.length).map(k => `${k}: ${alt[k]!.join(' · ')}`);

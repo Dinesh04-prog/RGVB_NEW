@@ -7,6 +7,7 @@
 //    `name` follows (Marathi if present, otherwise English).
 //  - Names are written in the shop style (lowercase name_eng with size glued, Devanagari units in Marathi).
 //  - Stock quantity is never filled (it is not printed on a pack).
+//  - The picture (front photo thumbnail) is filled only when the item has none.
 //  - Search key is left to the normal save (new items get one generated from the final names);
 //    for an existing item without one, it is filled here.
 
@@ -31,12 +32,13 @@ export interface FillableItem {
   expiry_date?: string;
   mfg_date?: string;
   full_name_eng?: string;
+  image?: string;
 }
 
 /** Fields the popup shows (yellow when auto-filled) plus hidden item fields. */
 export type FillField =
   | 'name_eng' | 'name_marathi' | 'barcode' | 'purchase_price' | 'price' | 'unit'
-  | 'full_name_eng' | 'brand' | 'net_qty' | 'expiry_date' | 'mfg_date' | 'search_key';
+  | 'full_name_eng' | 'brand' | 'net_qty' | 'expiry_date' | 'mfg_date' | 'search_key' | 'image';
 
 export interface FillOutcome<T> {
   item: T;
@@ -114,6 +116,7 @@ export const fillItemFromScan = <T extends FillableItem>(
   if (scan.net_qty && free('net_qty', emptyStr(item.net_qty))) { next.net_qty = scan.net_qty; filled.push('net_qty'); }
   if (scan.expiry_date && free('expiry_date', emptyStr(item.expiry_date))) { next.expiry_date = scan.expiry_date; filled.push('expiry_date'); }
   if (scan.mfg_date && free('mfg_date', emptyStr(item.mfg_date))) { next.mfg_date = scan.mfg_date; filled.push('mfg_date'); }
+  if (scan.image && scan.image.startsWith('data:image/') && free('image', emptyStr(item.image))) { next.image = scan.image; filled.push('image'); }
 
   const final = itemNameFields(next);
   if (!opts.isNew && free('search_key', emptyStr(item.search_key)) && final.eng && (final.marathi || next.name)) {
