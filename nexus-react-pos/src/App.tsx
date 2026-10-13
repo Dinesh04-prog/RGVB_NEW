@@ -18,6 +18,7 @@ import { usePhotoScanFill } from "./lib/usePhotoScanFill";
 import { InventoryTile, ItemThumb, INVENTORY_TILE_CSS } from "./components/InventoryTile";
 import { ItemImageField } from "./components/ItemImageField";
 import { withImage } from "./lib/itemImage";
+import { openExternalUrl, saveFile, XLSX_MIME } from "./lib/androidApp";
 import { PhotoScanButton, PhotoScanNotices, PhotoScanDebug, MrpChoices, NameChoices, QtyChoices, ScanSuggestion } from "./components/PhotoScanFill";
 
 interface InventoryItem {
@@ -714,7 +715,9 @@ export default function App() {
       const ws = XLSX.utils.json_to_sheet(mappedData);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Inventory");
-      XLSX.writeFile(wb, "Updated_Inventory.xlsx");
+      // Android app: saved to Downloads + share sheet (a WebView ignores browser downloads)
+      const out = XLSX.write(wb, { bookType: "xlsx", type: "array" }) as ArrayBuffer;
+      await saveFile("Updated_Inventory.xlsx", new Blob([out], { type: XLSX_MIME }));
     } catch (err) {
       console.error(err);
       alert("Error exporting Excel file.");
@@ -736,7 +739,11 @@ export default function App() {
       createdAt: Date.now(),
     };
     try {
-      await createReview(session);
+      // The Firestore SDK keeps retrying when the daily free quota is used up, so don't wait forever.
+      const saved = await Promise.race([
+        createReview(session).then(() => true),
+        new Promise<false>(r => setTimeout(() => r(false), 15000)),
+      ]);
       setReviewStatus('pending');
       // Listen for owner's response
       if (reviewUnsubRef.current) reviewUnsubRef.current();
@@ -752,15 +759,30 @@ export default function App() {
           if (reviewUnsubRef.current) { reviewUnsubRef.current(); reviewUnsubRef.current = null; }
         }
       });
-      // Open WhatsApp with review link
-      const appUrl = import.meta.env.VITE_APP_URL || 'http://localhost:5173';
+      if (!saved) {
+        alert('The bill could not reach the owner yet: the database did not answer.\n\n' +
+          'Check the internet. If it is fine, the free daily database limit may be used up (it resets every day); ' +
+          'the bill is sent automatically when the database answers again. Tap "Cancel" on the review banner to bill without the owner.');
+        return;
+      }
+      // WhatsApp message. The app's own address (appassets.androidplatform.net) only exists inside the app,
+      // so then the owner is told where to find the bill instead of getting a dead link.
+      const appUrl = (import.meta.env.VITE_APP_URL || 'http://localhost:5173').replace(/\/$/, '');
+      const linkWorks = /^https?:\/\//.test(appUrl) && !appUrl.includes('appassets.androidplatform.net');
       const ownerPhone = import.meta.env.VITE_OWNER_PHONE || '';
-      const link = `${appUrl}/?review=${id}`;
       const total = cart.reduce((s, i) => s + i.total, 0);
-      const msg = `📋 *Bill Review Request*\n\nFrom: ${user?.name ?? 'Cashier'}\nCustomer: ${session.customerName}\nItems: ${cart.length} | Total: ₹${total.toFixed(0)}\n\nPlease review & update rates:\n${link}`;
-      window.open(`https://wa.me/${ownerPhone}?text=${encodeURIComponent(msg)}`, '_blank');
+      const how = linkWorks
+        ? `Please review & update rates:\n${appUrl}/?review=${id}`
+        : 'Please open the NexusPOS app → BILLS → Pending to review & update rates.';
+      const msg = `📋 *Bill Review Request*\n\nFrom: ${user?.name ?? 'Cashier'}\nCustomer: ${session.customerName}\nItems: ${cart.length} | Total: ₹${total.toFixed(0)}\n\n${how}`;
+      openExternalUrl(`https://wa.me/${ownerPhone}?text=${encodeURIComponent(msg)}`);
     } catch (e) {
-      alert('Could not send to owner. Check Firebase connection.');
+      const code = (e as { code?: string })?.code;
+      alert(code === 'permission-denied'
+        ? 'Could not send to owner: the database refused the bill (Firestore rules).'
+        : code === 'resource-exhausted'
+          ? 'Could not send to owner: the free daily database limit is used up. It resets every day.'
+          : 'Could not send to owner. Check the internet connection.');
       console.error(e);
     }
   };
@@ -1104,17 +1126,16 @@ export default function App() {
     const url = phone
       ? `https://wa.me/91${phone}?text=${encodeURIComponent(text)}`
       : `https://wa.me/?text=${encodeURIComponent(text)}`;
-    window.open(url, '_blank');
+    openExternalUrl(url);
   };
 
   const downloadReceiptImage = async () => {
     if (!receiptCardRef.current) return;
     try {
       const canvas = await html2canvas(receiptCardRef.current, { backgroundColor: '#ffffff', scale: 2 });
-      const link = document.createElement('a');
-      link.download = `receipt_${lastReceipt?.receipt_no || 'bill'}.png`;
-      link.href = canvas.toDataURL('image/png');
-      link.click();
+      const blob = await new Promise<Blob | null>(r => canvas.toBlob(r, 'image/png'));
+      if (!blob) throw new Error('empty image');
+      await saveFile(`receipt_${lastReceipt?.receipt_no || 'bill'}.png`, blob);
     } catch (err) {
       console.error('Image download failed', err);
       alert('Could not generate image.');
@@ -1147,13 +1168,8 @@ export default function App() {
         timestamp: new Date().toISOString()
       };
       const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `nexus_pos_backup_${new Date().toISOString().split('T')[0]}.json`;
-      link.click();
-      URL.revokeObjectURL(url);
-      alert("Backup downloaded successfully! Keep this file safe.");
+      const where = await saveFile(`nexus_pos_backup_${new Date().toISOString().split('T')[0]}.json`, blob);
+      alert(where ? `Backup saved to ${where}. Keep this file safe.` : "Backup downloaded successfully! Keep this file safe.");
     } catch (err) {
       console.error(err);
       alert("Backup failed.");

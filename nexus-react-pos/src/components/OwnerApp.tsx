@@ -15,6 +15,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { InventoryTile, ItemThumb, INVENTORY_TILE_CSS } from './InventoryTile';
 import { ItemImageField } from './ItemImageField';
 import { withImage } from '../lib/itemImage';
+import { saveFile, XLSX_MIME } from '../lib/androidApp';
 import {
   translateHinglishToMarathi, normalizeForSearch, HINGLISH_TO_MARATHI,
 } from '../lib/phonetic';
@@ -255,7 +256,9 @@ export default function OwnerApp({ initialReviewId }: { initialReviewId: string 
       const ws = XLSX.utils.json_to_sheet(data);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Inventory');
-      XLSX.writeFile(wb, 'Updated_Inventory.xlsx');
+      // Android app: saved to Downloads + share sheet (a WebView ignores browser downloads)
+      const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' }) as ArrayBuffer;
+      await saveFile('Updated_Inventory.xlsx', new Blob([out], { type: XLSX_MIME }));
     } catch (err) { console.error(err); alert('Error exporting Excel.'); }
   };
 

@@ -90,6 +90,7 @@ class MainActivity : AppCompatActivity() {
 
         webView.addJavascriptInterface(AndroidBtBridge(this), "AndroidBT")
         webView.addJavascriptInterface(AndroidScanBridge(this), "AndroidScan")
+        webView.addJavascriptInterface(AndroidAppBridge(this), "AndroidApp")
 
         webView.webViewClient = object : WebViewClientCompat() {
 
