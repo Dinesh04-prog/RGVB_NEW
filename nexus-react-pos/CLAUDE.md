@@ -110,6 +110,12 @@ This writes to `public/inventory.json`. The app loads `public/inventory.json` on
 | MRP_INR | `purchase_price` |
 | Selling_Price_INR | `price` |
 | Stock_Quantity | `stock_quantity`, `stock_qty` |
+| Search_key, Brand, Barcode, Pack_Size, Expiry_Date, Mfg_Date, Full_Name_Eng | `search_key`, `brand`, `barcode`, `net_qty`, `expiry_date`, `mfg_date`, `full_name_eng` |
+| Unit_Rates | `unit_rates` (JSON text) |
+| Image | `image` (JPEG data URL as text, ≤ 25 KB) |
+
+Export, auto-sync and import all go through `src/lib/inventoryExcel.ts`, so an exported file restores every detail
+including the picture (`npm run test:excel` checks the round trip). Older files with only the first columns still load.
 
 Unit is auto-extracted from the English name (e.g. `"MDH Ghee (1 L)"` → `"1 L"`).
 

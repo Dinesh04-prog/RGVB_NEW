@@ -16,6 +16,7 @@ import { InventoryTile, ItemThumb, INVENTORY_TILE_CSS } from './InventoryTile';
 import { ItemImageField } from './ItemImageField';
 import { withImage } from '../lib/itemImage';
 import { saveFile, XLSX_MIME } from '../lib/androidApp';
+import { inventoryToXlsx, rowToItem, fixImportedImages } from '../lib/inventoryExcel';
 import {
   translateHinglishToMarathi, normalizeForSearch, HINGLISH_TO_MARATHI,
 } from '../lib/phonetic';
@@ -219,17 +220,9 @@ export default function OwnerApp({ initialReviewId }: { initialReviewId: string 
         const wb = XLSX.read(evt.target?.result, { type: 'binary' });
         const ws = wb.Sheets[wb.SheetNames[0]];
         const data = XLSX.utils.sheet_to_json(ws);
-        const mapped: InventoryItem[] = (data as any[]).map((row, i) => ({
-          id: row['SKU_ID'] || row['Item_ID'] || row['id'] || `UPLOAD-${i}`,
-          name: row['Marathi_Name'] || row['Item_Name'] || row['name'] || row['English_Name'] || `Item ${i}`,
-          name_marathi: row['Marathi_Name'] || row['Item_Name_Marathi'] || row['name_marathi'] || '',
-          name_eng: row['English_Name'] || row['Item_Name_Eng'] || row['name_eng'] || '',
-          search_key: String(row['Search_key'] || row['search_key'] || row['SearchKey'] || '').trim(),
-          unit: row['Weight_Volume'] || row['Unit'] || row['unit'] || 'unit',
-          price: Number(row['Selling_Price_INR'] || row['Selling_Price'] || row['price'] || 0),
-          purchase_price: Number(row['Purchase_Price_INR'] || row['Purchase_Price'] || row['purchase_price'] || 0),
-          stock_quantity: Number(row['Stock_Quantity'] || row['stock_qty'] || row['Quantity'] || 0),
-        }));
+        // All columns of an exported file, including the picture (older files: missing columns stay empty)
+        const mapped: InventoryItem[] = (data as Record<string, unknown>[]).map((row, i) => rowToItem(row, i));
+        const pictures = await fixImportedImages(mapped);
         const unique = new Map<string, InventoryItem>();
         mapped.forEach(item => {
           const k = formatName(item.name_marathi || item.name_eng || item.name).toLowerCase();
@@ -238,7 +231,7 @@ export default function OwnerApp({ initialReviewId }: { initialReviewId: string 
         const deduped = Array.from(unique.values());
         setInventory(deduped); setFuse(buildFuse(deduped));
         await localforage.setItem('custom_inventory', deduped);
-        alert(`Loaded ${deduped.length} unique items (from ${mapped.length}).`);
+        alert(`Loaded ${deduped.length} unique items (from ${mapped.length})${pictures ? `, ${pictures} with pictures` : ''}.`);
       };
       reader.readAsBinaryString(file);
     } catch (err) { console.error(err); alert('Error parsing Excel file.'); }
@@ -247,17 +240,8 @@ export default function OwnerApp({ initialReviewId }: { initialReviewId: string 
   const exportInventoryToExcel = async () => {
     try {
       const XLSX = await import('xlsx');
-      const data = inventory.map(i => ({
-        SKU_ID: i.id, Item_Name: i.name, Marathi_Name: i.name_marathi,
-        English_Name: i.name_eng, Weight_Volume: i.unit,
-        Selling_Price_INR: i.price, Purchase_Price_INR: i.purchase_price || 0,
-        Stock_Quantity: i.stock_quantity ?? i.stock_qty ?? 0,
-      }));
-      const ws = XLSX.utils.json_to_sheet(data);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, 'Inventory');
-      // Android app: saved to Downloads + share sheet (a WebView ignores browser downloads)
-      const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' }) as ArrayBuffer;
+      // Every item detail and the picture, so the file can restore a lost inventory
+      const out = inventoryToXlsx(XLSX, inventory);
       await saveFile('Updated_Inventory.xlsx', new Blob([out], { type: XLSX_MIME }));
     } catch (err) { console.error(err); alert('Error exporting Excel.'); }
   };
