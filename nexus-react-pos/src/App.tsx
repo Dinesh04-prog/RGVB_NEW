@@ -15,7 +15,7 @@ import type { CartItem, Receipt } from "./lib/db";
 import { translateHinglishToMarathi, transliterateDevanagariToLatin, normalizeForSearch, HINGLISH_TO_MARATHI, parseUserQuery, scoreCandidate } from "./lib/phonetic";
 import { itemNameFields, makeSearchKey, withItemNames } from "./lib/itemNames";
 import { usePhotoScanFill } from "./lib/usePhotoScanFill";
-import { InventoryTile, INVENTORY_TILE_CSS } from "./components/InventoryTile";
+import { InventoryTile, ItemThumb, INVENTORY_TILE_CSS } from "./components/InventoryTile";
 import { ItemImageField } from "./components/ItemImageField";
 import { withImage } from "./lib/itemImage";
 import { PhotoScanButton, PhotoScanNotices, PhotoScanDebug, MrpChoices, NameChoices, QtyChoices, ScanSuggestion } from "./components/PhotoScanFill";
@@ -2297,8 +2297,11 @@ export default function App() {
                         onClick={() => selectItemForModal(s)}
                         onMouseEnter={() => setSelectedSuggestionIndex(idx)}
                       >
-                        <span><b>{formatName(s.name_marathi || s.name_eng || s.name).toUpperCase()}</b> <small style={{ color: '#6c757d' }}>({s.unit || 'unit'})</small>{s.brand && <small style={{ color: '#0a3d62', fontWeight: 600, marginLeft: '5px' }}>({s.brand})</small>}</span>
-                        <span>₹{Number(s.price || 0).toFixed(2)}</span>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                          <ItemThumb item={s} />
+                          <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}><b>{formatName(s.name_marathi || s.name_eng || s.name).toUpperCase()}</b> <small style={{ color: '#6c757d' }}>({s.unit || 'unit'})</small>{s.brand && <small style={{ color: '#0a3d62', fontWeight: 600, marginLeft: '5px' }}>({s.brand})</small>}</span>
+                        </span>
+                        <span style={{ flexShrink: 0, marginLeft: 8 }}>₹{Number(s.price || 0).toFixed(2)}</span>
                       </div>
                     ))}
                     {/* Quick-add at bottom of results */}

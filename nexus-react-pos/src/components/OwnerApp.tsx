@@ -12,7 +12,7 @@ import {
 import type { ReviewSession, InventoryItem } from '../lib/firebase';
 import type { CartItem } from '../lib/db';
 import { useAuth } from '../contexts/AuthContext';
-import { InventoryTile, INVENTORY_TILE_CSS } from './InventoryTile';
+import { InventoryTile, ItemThumb, INVENTORY_TILE_CSS } from './InventoryTile';
 import { ItemImageField } from './ItemImageField';
 import { withImage } from '../lib/itemImage';
 import {
@@ -768,8 +768,11 @@ function OwnerReviewPage({ reviewId, onBack, fuse: invFuse }: {
                 <div className="o-suggestions">
                   {suggestions.map((s, idx) => (
                     <div key={s.id} className={`o-suggestion-item${idx === selectedIdx ? ' active' : ''}`} onClick={() => openAddModal(s)} onMouseEnter={() => setSelectedIdx(idx)}>
-                      <span><b>{formatName(s.name_marathi || s.name_eng || s.name).toUpperCase()}</b> <small style={{ color: '#6c757d' }}>({s.unit || 'unit'})</small>{s.brand && <small style={{ color: '#0a3d62', fontWeight: 600 }}> {s.brand}</small>}</span>
-                      <span style={{ color: '#16A34A', fontWeight: 700, flexShrink: 0 }}>{fmt(s.price || 0)}</span>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                        <ItemThumb item={s} />
+                        <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}><b>{formatName(s.name_marathi || s.name_eng || s.name).toUpperCase()}</b> <small style={{ color: '#6c757d' }}>({s.unit || 'unit'})</small>{s.brand && <small style={{ color: '#0a3d62', fontWeight: 600 }}> {s.brand}</small>}</span>
+                      </span>
+                      <span style={{ color: '#16A34A', fontWeight: 700, flexShrink: 0, marginLeft: 8 }}>{fmt(s.price || 0)}</span>
                     </div>
                   ))}
                 </div>

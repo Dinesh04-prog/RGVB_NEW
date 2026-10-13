@@ -94,14 +94,30 @@ export function InventoryTile({ item, isFav, onOpen, onToggleFav, onDelete }: Pr
   );
 }
 
+/** Small square picture (or the same letter placeholder) beside a name in the billing search lists. */
+export function ItemThumb({ item }: { item: Pick<TileItem, 'id' | 'name' | 'name_eng' | 'name_marathi' | 'image'> }) {
+  const [broken, setBroken] = useState<string | null>(null);
+  const names = itemNameFields(item);
+  const showImage = !!item.image && broken !== item.image;
+  return (
+    <span className={`inv-thumb ${showImage ? '' : `ph-${tint(item.id)}`}`} aria-hidden="true">
+      {showImage
+        ? <img src={item.image} alt="" loading="lazy" decoding="async" onError={() => setBroken(item.image!)} />
+        : placeholderText(names.eng, names.marathi)}
+    </span>
+  );
+}
+
 /** Tile styles, injected by both App.tsx and OwnerApp.tsx. */
 export const INVENTORY_TILE_CSS = `
   .inv-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; max-width: 760px; margin-bottom: 8px; }
   .inv-tile { background: #fff; border: 1px solid #E5E7EB; border-radius: 10px; padding: 5px 5px 6px; display: flex; flex-direction: column; gap: 4px; min-width: 0; cursor: pointer; box-shadow: 0 1px 4px rgba(10,61,98,0.06); }
   .inv-tile-img { position: relative; aspect-ratio: 1 / 1; border-radius: 8px; overflow: hidden; background: #F1F5F9; display: flex; align-items: center; justify-content: center; }
   .inv-tile-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .inv-tile-img.ph-blue { background: linear-gradient(135deg, #E0EDFF, #C7DCFB); color: #0a3d62; }
-  .inv-tile-img.ph-green { background: linear-gradient(135deg, #E3F7EA, #C4EBD2); color: #15803D; }
+  .inv-tile-img.ph-blue, .inv-thumb.ph-blue { background: linear-gradient(135deg, #E0EDFF, #C7DCFB); color: #0a3d62; }
+  .inv-tile-img.ph-green, .inv-thumb.ph-green { background: linear-gradient(135deg, #E3F7EA, #C4EBD2); color: #15803D; }
+  .inv-thumb { width: 40px; height: 40px; flex-shrink: 0; border-radius: 8px; overflow: hidden; background: #F1F5F9; display: inline-flex; align-items: center; justify-content: center; font-size: 0.85rem; font-weight: 800; font-family: "Noto Sans Devanagari", 'Segoe UI', sans-serif; line-height: 1; user-select: none; border: 1px solid #E5E7EB; }
+  .inv-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .inv-tile-ph { font-size: 1.9rem; font-weight: 800; letter-spacing: 0.02em; font-family: "Noto Sans Devanagari", 'Segoe UI', sans-serif; line-height: 1; user-select: none; }
   .inv-tile-corner { position: absolute; top: 0; width: 36px; height: 36px; padding: 3px; border: none; background: transparent; cursor: pointer; display: flex; align-items: flex-start; }
   .inv-tile-corner.left { left: 0; justify-content: flex-start; }
