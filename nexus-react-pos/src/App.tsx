@@ -406,7 +406,7 @@ export default function App() {
 
 
   // Modals simulation state
-  const [modalItem, setModalItem] = useState<{ item: InventoryItem | CartItem, qty: number, rate: number, isEdit: boolean, index: number | null, cartUnit: string, multiplier: number } | null>(null);
+  const [modalItem, setModalItem] = useState<{ item: InventoryItem | CartItem, qty: number, rate: number, isEdit: boolean, index: number | null, cartUnit: string, multiplier: number, nameMr: string } | null>(null);
   const [voiceContext, setVoiceContext] = useState<{ qty: number, cartUnit: string } | null>(null);
   const lastParsedRef = useRef<{ qty: number; cartUnit: string } | null>(null);
   const voiceConfidentRef = useRef(false);
@@ -833,7 +833,8 @@ export default function App() {
       isEdit: false,
       index: null,
       cartUnit: finalCartUnit,
-      multiplier: finalMultiplier
+      multiplier: finalMultiplier,
+      nameMr: itemNameFields(item).marathi
     });
     setSuggestions([]);
     setQuery("");
@@ -857,16 +858,23 @@ export default function App() {
   const handleModalSubmit = () => {
     if (!modalItem) return;
     const { item, qty, rate, isEdit, index, cartUnit, multiplier } = modalItem;
-    const name = formatName((item as any).name_marathi || (item as any).name);
+    // Marathi name edited in this popup: saved to the inventory (and Firestore) and used on the bill.
+    // An emptied box is ignored, so a saved name is never wiped from here.
+    const saved = inventory.find(i => i.id === item.id);
+    const newMr = modalItem.nameMr.trim();
+    const renamed = !!saved && !!newMr && newMr !== itemNameFields(saved).marathi;
+    if (renamed) upsertInventoryItem(withItemNames(saved, { marathi: newMr })).catch(err => console.error("Name save failed:", err));
+    const name = renamed ? formatName(newMr) : formatName((item as any).name_marathi || (item as any).name);
     const calcTotal = qty * rate * multiplier;
 
     if (isEdit && index !== null) {
-      const newCart = [...cart];
-      newCart[index] = { ...newCart[index], qty, rate, total: calcTotal, cartUnit, multiplier };
+      // other lines of the same item take the new name too
+      const newCart = cart.map(c => (renamed && c.id === item.id ? { ...c, name } : c));
+      newCart[index] = { ...newCart[index], name: renamed ? name : newCart[index].name, qty, rate, total: calcTotal, cartUnit, multiplier };
       setCart(newCart);
       speakText(`${name} updated to ${qty} ${cartUnit || "unit"}`);
     } else {
-      setCart([...cart, {
+      setCart([...cart.map(c => (renamed && c.id === item.id ? { ...c, name } : c)), {
         id: item.id,
         name: name,
         unit: item.unit || "unit",
@@ -884,7 +892,9 @@ export default function App() {
 
   const editCartItem = (index: number) => {
     const item = cart[index];
-    setModalItem({ item, qty: item.qty, rate: item.rate, isEdit: true, index, cartUnit: item.cartUnit || item.unit || "unit", multiplier: item.multiplier || 1 });
+    const saved = inventory.find(i => i.id === item.id);
+    setModalItem({ item, qty: item.qty, rate: item.rate, isEdit: true, index, cartUnit: item.cartUnit || item.unit || "unit", multiplier: item.multiplier || 1,
+      nameMr: saved ? itemNameFields(saved).marathi : item.name });
   };
 
   const removeCartItem = (index: number) => {
@@ -2920,6 +2930,34 @@ export default function App() {
               <span>{modalItem.isEdit ? "EDIT ITEM" : "CONFIRM ITEM"}</span>
               <button style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: '1.2rem' }} onClick={() => setModalItem(null)}>✕</button>
             </div>
+            {(() => {
+              // Marathi name as saved in the inventory; a change is saved to the inventory when the item is added
+              const saved = inventory.find(i => i.id === modalItem.item.id);
+              const savedMr = saved ? itemNameFields(saved).marathi : '';
+              const eng = saved ? itemNameFields(saved).eng : '';
+              const changed = !!saved && !!modalItem.nameMr.trim() && modalItem.nameMr.trim() !== savedMr;
+              return (
+                <div style={{ marginBottom: '14px' }}>
+                  <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#6c757d', marginBottom: '4px', display: 'block' }}>ITEM NAME (MARATHI)</label>
+                  <input
+                    type="text"
+                    className="edit-input"
+                    style={{ fontFamily: '"Noto Sans Devanagari", sans-serif', textAlign: 'left', padding: '8px 10px', ...(changed ? { borderColor: '#0d6efd', background: '#F0F7FF' } : {}) }}
+                    placeholder={saved ? "Type the Marathi name" : "Not in inventory"}
+                    disabled={!saved}
+                    value={modalItem.nameMr}
+                    onChange={(e) => setModalItem({ ...modalItem, nameMr: e.target.value })}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleModalSubmit(); }}
+                  />
+                  {eng && <div style={{ fontSize: '0.78rem', color: '#6B7280', marginTop: 3 }}>{eng}</div>}
+                  {changed && (
+                    <div style={{ fontSize: '0.75rem', color: '#0d6efd', marginTop: 3 }}>
+                      New name will be saved to the inventory{savedMr ? ` (was: ${savedMr})` : ''}.
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
             <div style={{ textAlign: 'center', marginBottom: '10px', fontSize: '0.875rem', color: '#6c757d', fontWeight: 'bold' }}>
               QUANTITY
             </div>
