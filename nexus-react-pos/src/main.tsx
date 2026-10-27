@@ -7,6 +7,7 @@ import { GoogleOAuthProvider } from '@react-oauth/google'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import LoginPage from './components/LoginPage'
 import OwnerApp from './components/OwnerApp'
+import ShopSetup from './components/ShopSetup'
 
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? '';
 
@@ -39,17 +40,21 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
 }
 
 function AuthGate() {
-  const { user, isOwner } = useAuth();
+  const { user, shop, isOwner, ready } = useAuth();
   // Support direct review links: /?review=<id>
   const [reviewId] = useState(() =>
     new URLSearchParams(window.location.search).get('review')
   );
 
+  if (!ready) return (
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'sans-serif', color: '#0a3d62' }}>
+      <div style={{ textAlign: 'center' }}><div style={{ fontSize: '2.5rem' }}>🛒</div>Loading…</div>
+    </div>
+  );
   if (!user) return <LoginPage />;
-  // Owner email → full owner interface. Anyone else with a direct review link → only that bill
-  // (no owner dashboard or inventory editing).
+  if (!shop) return <ShopSetup />;
+  // The shop's owner → owner panel (a review link opens that bill). Cashiers → billing app.
   if (isOwner) return <OwnerApp initialReviewId={reviewId} />;
-  if (reviewId) return <OwnerApp initialReviewId={reviewId} reviewOnly />;
   return <App />;
 }
 

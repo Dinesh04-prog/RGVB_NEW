@@ -9,7 +9,10 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test:names": "rolldown scripts/test-item-names.ts -o node_modules/.tmp/test-item-names.mjs -p node -f esm && node node_modules/.tmp/test-item-names.mjs",
-    "test:excel": "rolldown scripts/test-inventory-excel.ts -o node_modules/.tmp/test-inventory-excel.mjs -p node -f esm && node node_modules/.tmp/test-inventory-excel.mjs"
+    "test:excel": "rolldown scripts/test-inventory-excel.ts -o node_modules/.tmp/test-inventory-excel.mjs -p node -f esm && node node_modules/.tmp/test-inventory-excel.mjs",
+    "test:rules": "firebase emulators:exec --only firestore --project demo-kirana-rules \"node scripts/test-rules.mjs\"",
+    "emulators": "firebase emulators:start --only auth,firestore --project demo-kirana",
+    "dev:emulators": "vite --mode emulators"
   },
   "dependencies": {
     "@react-oauth/google": "^0.13.4",
@@ -25,6 +28,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@firebase/rules-unit-testing": "^5.0.2",
     "@types/node": "^24.12.2",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",

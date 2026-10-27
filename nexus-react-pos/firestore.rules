@@ -1,12 +1,82 @@
 rules_version = '2';
+
+// Kirana POS — every shop's data lives under shops/{shopId} and only that shop's members can reach it.
+//
+//   users/{uid}                       → { shopId }            the shop this person uses (only they can read it)
+//   joinCodes/{code}                  → { shopId }            6-digit code a cashier types to join
+//   shops/{shopId}                    → shop profile          members read, owner edits
+//   shops/{shopId}/members/{uid}      → { role, ... }         owner | cashier
+//   shops/{shopId}/inventory/{item}   → items                 members read and write
+//   shops/{shopId}/reviews/{id}       → bill approvals        cashiers send, only the owner approves / rejects
+//
+// Test: npm run test:rules (runs against the local emulator, never the live database).
+
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /reviews/{reviewId} {
-      allow read, write: if request.auth != null;
+
+    function signedIn() { return request.auth != null; }
+    function shopPath(shopId) { return /databases/$(database)/documents/shops/$(shopId); }
+    function memberPath(shopId, uid) { return /databases/$(database)/documents/shops/$(shopId)/members/$(uid); }
+    function isMember(shopId) { return signedIn() && exists(memberPath(shopId, request.auth.uid)); }
+    function isOwner(shopId) {
+      return isMember(shopId) && get(memberPath(shopId, request.auth.uid)).data.role == 'owner';
     }
-    match /inventory_overrides/{itemId} {
-      // Any logged-in user (owner or cashier) can sync inventory changes
-      allow read, write: if request.auth != null;
+    // During the batch that creates a shop, the shop and owner records exist only "after" the write
+    function ownsShopAfter(shopId) {
+      return signedIn() && getAfter(shopPath(shopId)).data.ownerUid == request.auth.uid;
+    }
+
+    match /users/{uid} {
+      allow read, write: if signedIn() && request.auth.uid == uid;
+    }
+
+    match /joinCodes/{code} {
+      // Anyone signed in may look up one code (never list them all)
+      allow get: if signedIn();
+      allow create: if (ownsShopAfter(request.resource.data.shopId) || isOwner(request.resource.data.shopId))
+        && getAfter(shopPath(request.resource.data.shopId)).data.joinCode == code;
+      allow delete: if isOwner(resource.data.shopId);
+    }
+
+    match /shops/{shopId} {
+      allow read: if isMember(shopId);
+      allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid
+        && getAfter(memberPath(shopId, request.auth.uid)).data.role == 'owner';
+      // The owner edits the profile; ownerUid never changes
+      allow update: if isOwner(shopId) && request.resource.data.ownerUid == resource.data.ownerUid;
+      allow delete: if isOwner(shopId);
+
+      match /members/{uid} {
+        allow read: if isMember(shopId);
+        allow create: if signedIn() && request.auth.uid == uid && (
+          // the shop's creator, in the same batch as the shop
+          (request.resource.data.role == 'owner' && ownsShopAfter(shopId))
+          // a cashier who knows the shop's current code
+          || (request.resource.data.role == 'cashier'
+              && request.resource.data.joinCode == get(shopPath(shopId)).data.joinCode)
+        );
+        allow update: if false;
+        // The owner removes cashiers; anyone may leave; the owner record itself stays
+        allow delete: if resource.data.role != 'owner' && (isOwner(shopId) || request.auth.uid == uid);
+      }
+
+      match /inventory/{itemId} {
+        allow read, write: if isMember(shopId);
+      }
+
+      match /reviews/{reviewId} {
+        allow read: if isMember(shopId);
+        allow create: if isMember(shopId) && request.resource.data.status == 'pending';
+        // Approve / reject is the owner's decision
+        allow update: if isOwner(shopId);
+        allow delete: if isOwner(shopId);
+      }
+    }
+
+    // Old single-shop data (before shops existed): read-only, so an owner can copy it into their shop once.
+    // Remove this block after the import.
+    match /inventory/{itemId} {
+      allow read: if signedIn();
     }
   }
 }

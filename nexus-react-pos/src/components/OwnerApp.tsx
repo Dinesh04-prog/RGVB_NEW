@@ -22,6 +22,7 @@ import {
 } from '../lib/phonetic';
 import { itemNameFields, makeSearchKey, withItemNames } from '../lib/itemNames';
 import { getUnitMultiplier, STANDARD_UNITS } from '../lib/units';
+import ShopPanel from './ShopPanel';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 const fmt = (n: number) => `₹${n.toFixed(2)}`;
@@ -292,8 +293,9 @@ function BarcodeScanner({ onResult, onClose }: { onResult: (code: string) => voi
 
 // ── OwnerApp: main shell with sidebar + tab routing ──────────────────────────
 export default function OwnerApp({ initialReviewId, reviewOnly = false }: { initialReviewId: string | null; reviewOnly?: boolean }) {
-  const { user, logout } = useAuth();
-  const [activeTab, setActiveTab] = useState<'bills' | 'inventory'>('bills');
+  const { user, shop, logout } = useAuth();
+  const shopName = shop?.name || '';
+  const [activeTab, setActiveTab] = useState<'bills' | 'inventory' | 'shop'>('bills');
   // ☰ sidebar: on desktop it is shown or collapsed (remembered); on phones it is a drawer, closed by default
   const [sideCollapsed, setSideCollapsed] = useState(() => {
     try { return localStorage.getItem('owner_sidebar_collapsed') === '1'; } catch { return false; }
@@ -550,8 +552,8 @@ export default function OwnerApp({ initialReviewId, reviewOnly = false }: { init
     try { localStorage.setItem('owner_sidebar_collapsed', next ? '1' : '0'); } catch { /* storage blocked */ }
   };
   const closeSidebar = () => { if (isPhone()) setDrawerOpen(false); else if (!sideCollapsed) toggleSidebar(); };
-  const goTab = (t: 'bills' | 'inventory') => { setActiveTab(t); setDrawerOpen(false); };
-  const tabTitle = activeTab === 'bills' ? '📋 Bills' : '📦 Inventory';
+  const goTab = (t: 'bills' | 'inventory' | 'shop') => { setActiveTab(t); setDrawerOpen(false); };
+  const tabTitle = activeTab === 'bills' ? '📋 Bills' : activeTab === 'inventory' ? '📦 Inventory' : '🏪 Shop';
 
   return (
     <div className={sideCollapsed ? 'o-side-collapsed' : undefined} style={{ minHeight: '100vh', background: '#f1f2f6' }}>
@@ -565,13 +567,14 @@ export default function OwnerApp({ initialReviewId, reviewOnly = false }: { init
         <div className="o-side-head">
           <div style={{ minWidth: 0 }}>
             <div style={{ fontWeight: 700, fontSize: '1rem' }}>👑 Owner Panel</div>
-            <div style={{ fontSize: '0.72rem', opacity: 0.65, marginTop: 2 }}>Rajendra GVB</div>
+            <div style={{ fontSize: '0.72rem', opacity: 0.65, marginTop: 2 }}>{shopName}</div>
           </div>
           <button className="o-side-close" onClick={closeSidebar} aria-label="Close menu">✕</button>
         </div>
         <div style={{ flex: 1 }}>
           <a className={`nav-link ${activeTab === 'bills' ? 'active' : ''}`} onClick={() => goTab('bills')}>📋 BILLS {badge}</a>
           <a className={`nav-link ${activeTab === 'inventory' ? 'active' : ''}`} onClick={() => goTab('inventory')}>📦 INVENTORY</a>
+          <a className={`nav-link ${activeTab === 'shop' ? 'active' : ''}`} onClick={() => goTab('shop')}>🏪 SHOP & CASHIERS</a>
         </div>
         {user && (
           <div style={{ padding: '1rem', borderTop: '1px solid rgba(255,255,255,0.15)' }}>
@@ -595,7 +598,7 @@ export default function OwnerApp({ initialReviewId, reviewOnly = false }: { init
         </button>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: '1rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{tabTitle}</div>
-          <div style={{ fontSize: '0.7rem', opacity: 0.7 }}>👑 Owner · Rajendra GVB</div>
+          <div style={{ fontSize: '0.7rem', opacity: 0.7, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>👑 Owner · {shopName}</div>
         </div>
         {user && <button onClick={logout} className="o-signout-btn o-topbar-signout">Sign Out</button>}
       </div>
@@ -606,6 +609,9 @@ export default function OwnerApp({ initialReviewId, reviewOnly = false }: { init
         {activeTab === 'bills' && (
           <OwnerDashboard pending={pending} onOpen={id => setCurrentReviewId(id)} />
         )}
+
+        {/* ── Shop tab: join code, cashiers, old-inventory import ─────────────── */}
+        {activeTab === 'shop' && <ShopPanel shopItemCount={inventory.length} />}
 
         {/* ── Inventory tab ─────────────────────────────────────────────────── */}
         {activeTab === 'inventory' && (
