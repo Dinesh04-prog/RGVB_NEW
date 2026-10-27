@@ -1,7 +1,7 @@
 {
-  "name": "Rajendra GVB - POS",
-  "short_name": "Rajendra POS",
-  "description": "Offline Point of Sale for Rajendra GVB Grocery Store",
+  "name": "Kirana POS",
+  "short_name": "Kirana POS",
+  "description": "Billing and stock for kirana shops: Marathi voice search, barcode, Bluetooth printing, owner approval.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0a3d62",

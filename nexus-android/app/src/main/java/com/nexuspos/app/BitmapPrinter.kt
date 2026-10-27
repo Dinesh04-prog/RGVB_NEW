@@ -50,12 +50,12 @@ object BitmapPrinter {
         // ── Shop header ──────────────────────────────────────────────────────
         bold.textSize   = 38f
         bold.textAlign  = Paint.Align.CENTER
-        canvas.drawText("RAJENDRA GVB", PAPER_W / 2f, y + 38f, bold)
+        canvas.drawText(json.optJSONObject("shop")?.optString("name", "").orEmpty().uppercase(), PAPER_W / 2f, y + 38f, bold)
         y += 50f
 
         normal.textSize  = 22f
         normal.textAlign = Paint.Align.CENTER
-        canvas.drawText("Kirana & Grocery Store", PAPER_W / 2f, y + 22f, normal)
+        canvas.drawText(json.optJSONObject("shop")?.optString("tagline", "").orEmpty(), PAPER_W / 2f, y + 22f, normal)
         y += 32f
 
         y = divider(canvas, line, y)
@@ -136,7 +136,8 @@ object BitmapPrinter {
         // ── Footer ───────────────────────────────────────────────────────────
         normal.textSize  = 22f
         normal.textAlign = Paint.Align.CENTER
-        canvas.drawText("*** Thank You — Visit Again! ***", PAPER_W / 2f, y + 22f, normal)
+        val footer = json.optJSONObject("shop")?.optString("footer", "").orEmpty().ifEmpty { "Thank You — Visit Again!" }
+        canvas.drawText("*** $footer ***", PAPER_W / 2f, y + 22f, normal)
         y += 36f
 
         // Crop to actual content

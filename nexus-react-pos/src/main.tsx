@@ -1,4 +1,4 @@
-import { StrictMode, useState, Component } from 'react'
+import { StrictMode, useEffect, useState, Component } from 'react'
 import type { ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
@@ -8,6 +8,7 @@ import { AuthProvider, useAuth } from './contexts/AuthContext'
 import LoginPage from './components/LoginPage'
 import OwnerApp from './components/OwnerApp'
 import ShopSetup from './components/ShopSetup'
+import { APP_NAME } from './lib/appInfo'
 
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? '';
 
@@ -45,6 +46,8 @@ function AuthGate() {
   const [reviewId] = useState(() =>
     new URLSearchParams(window.location.search).get('review')
   );
+  const shopName = shop?.name;
+  useEffect(() => { document.title = shopName ? `${shopName} · ${APP_NAME}` : APP_NAME; }, [shopName]);
 
   if (!ready) return (
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'sans-serif', color: '#0a3d62' }}>

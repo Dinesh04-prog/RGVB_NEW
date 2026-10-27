@@ -15,6 +15,8 @@ import type { CartItem, Receipt } from "./lib/db";
 import { translateHinglishToMarathi, transliterateDevanagariToLatin, normalizeForSearch, HINGLISH_TO_MARATHI, parseUserQuery, scoreCandidate } from "./lib/phonetic";
 import { itemNameFields, makeSearchKey, withItemNames } from "./lib/itemNames";
 import { getUnitMultiplier, STANDARD_UNITS } from "./lib/units";
+import { brandOf, isPrinterText } from "./lib/shopBrand";
+import { APP_NAME } from "./lib/appInfo";
 import { usePhotoScanFill } from "./lib/usePhotoScanFill";
 import { InventoryTile, ItemThumb, INVENTORY_TILE_CSS } from "./components/InventoryTile";
 import { ItemImageField } from "./components/ItemImageField";
@@ -45,7 +47,9 @@ interface InventoryItem {
 }
 
 export default function App() {
-  const { user, logout } = useAuth();
+  const { user, shop, logout } = useAuth();
+  // Shop name, tagline, footer, logo, bill prefix… from the owner's shop settings (lib/shopBrand.ts)
+  const brand = brandOf(shop);
   const [activeTab, setActiveTab] = useState("billing");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
@@ -736,11 +740,11 @@ export default function App() {
       // so then the owner is told where to find the bill instead of getting a dead link.
       const appUrl = (import.meta.env.VITE_APP_URL || 'http://localhost:5173').replace(/\/$/, '');
       const linkWorks = /^https?:\/\//.test(appUrl) && !appUrl.includes('appassets.androidplatform.net');
-      const ownerPhone = import.meta.env.VITE_OWNER_PHONE || '';
+      const ownerPhone = brand.whatsapp || import.meta.env.VITE_OWNER_PHONE || '';
       const total = cart.reduce((s, i) => s + i.total, 0);
       const how = linkWorks
         ? `Please review & update rates:\n${appUrl}/?review=${id}`
-        : 'Please open the NexusPOS app → BILLS → Pending to review & update rates.';
+        : `Please open the ${APP_NAME} app → BILLS → Pending to review & update rates.`;
       const msg = `📋 *Bill Review Request*\n\nFrom: ${user?.name ?? 'Cashier'}\nCustomer: ${session.customerName}\nItems: ${cart.length} | Total: ₹${total.toFixed(0)}\n\n${how}`;
       openExternalUrl(`https://wa.me/${ownerPhone}?text=${encodeURIComponent(msg)}`);
     } catch (e) {
@@ -1004,7 +1008,7 @@ export default function App() {
     }
     
     await localforage.setItem('bill_counter', { date: dateKey, count });
-    return `AA-${day}${month}-${count.toString().padStart(3, '0')}`;
+    return `${brand.billPrefix}-${day}${month}-${count.toString().padStart(3, '0')}`;
   };
 
   const checkout = async () => {
@@ -1071,7 +1075,7 @@ export default function App() {
   };
 
   const generateReceiptText = (r: Receipt) => {
-    let text = `*RAJENDRA GVB*\nFresh Groceries & More\n`;
+    let text = `*${brand.name.toUpperCase()}*\n${brand.tagline ? `${brand.tagline}\n` : ''}`;
     text += `Bill: ${r.receipt_no}\nDate: ${r.date}\n`;
     if (r.customerName) text += `Cust: ${r.customerName}\n`;
     if (r.customerPhone) text += `Ph: ${r.customerPhone}\n`;
@@ -1082,7 +1086,7 @@ export default function App() {
     });
     text += `─────────────────\n`;
     text += `*TOTAL: ₹${r.total.toFixed(2)}*\n`;
-    text += `Thank You! Visit Again.`;
+    text += brand.footer;
     return text;
   };
 
@@ -1410,7 +1414,8 @@ export default function App() {
     console.debug('[btSend] finished');
   };
 
-  const buildEscPos = (r: Receipt, hideRate = false, rasterProvider?: (item: any, index: number) => Uint8Array | null, logoRaster?: Uint8Array): Uint8Array => {
+  const buildEscPos = (r: Receipt, hideRate = false, rasterProvider?: (item: any, index: number) => Uint8Array | null, logoRaster?: Uint8Array,
+    textRaster?: (text: string, px: number, bold: boolean) => Uint8Array): Uint8Array => {
     const W = 48;
     const C1 = hideRate ? 29 : 19;
     const C2 = hideRate ? 10 : 10;
@@ -1445,12 +1450,18 @@ export default function App() {
     // ── Store header (centered, bold, double width+height) ──
     b(0x1B, 0x61, 0x01);  // align centre
     if (logoRaster) { buf.push(...logoRaster); nl(); }
-    b(0x1B, 0x45, 0x01);  // bold on
-    b(0x1D, 0x21, 0x11);  // double width + height
-    str('RAJENDRA GVB'); nl();
-    b(0x1D, 0x21, 0x00);  // normal size
-    b(0x1B, 0x45, 0x00);  // bold off
-    str('Fresh Groceries & More'); nl();
+    // Shop name / tagline: printer font for plain English, otherwise drawn (Marathi etc.)
+    const headerLine = (text: string, big: boolean) => {
+      if (!text) return;
+      if (!isPrinterText(text) && textRaster) { buf.push(...textRaster(text, big ? 34 : 22, big)); return; }
+      if (big) { b(0x1B, 0x45, 0x01); b(0x1D, 0x21, 0x11); }
+      str(big ? text.toUpperCase() : text); nl();
+      if (big) { b(0x1D, 0x21, 0x00); b(0x1B, 0x45, 0x00); }
+    };
+    headerLine(brand.name, true);
+    headerLine(brand.tagline, false);
+    headerLine(brand.address, false);
+    headerLine(brand.phone ? `Ph: ${brand.phone}` : '', false);
 
     // ── Divider ─────────────────────────────────────────────
     b(0x1B, 0x61, 0x00);  // align left
@@ -1520,7 +1531,8 @@ export default function App() {
 
     // ── Footer ───────────────────────────────────────────────
     b(0x1B, 0x61, 0x01);  // align centre
-    str('Thank You... Visit Again!'); nl(); // em dash U+2014
+    if (!isPrinterText(brand.footer) && textRaster) buf.push(...textRaster(brand.footer, 22, false));
+    else { str(brand.footer.replace(/—/g, '-')); nl(); }
     nl(); nl(); nl();
     b(0x1D, 0x56, 0x41, 0x10); // cut
 
@@ -1586,7 +1598,10 @@ export default function App() {
     // When running inside the Android WebView wrapper, hand the raw receipt JSON
     // to the native side so Android Canvas + Noto Devanagari renders the bitmap.
     if ((window as any).AndroidBT) {
-      (window as any).AndroidBT.printBillNative(JSON.stringify(receipt));
+      (window as any).AndroidBT.printBillNative(JSON.stringify({
+        ...receipt,
+        shop: { name: brand.name, tagline: brand.tagline, address: brand.address, phone: brand.phone, footer: brand.footer, logo: brand.logo },
+      }));
       return;
     }
 
@@ -1607,8 +1622,9 @@ export default function App() {
     // Pre-render shop logo for BLE receipt header
     let logoRaster: Uint8Array | undefined;
     try {
+      if (!brand.logo) throw new Error('no logo');
       const logoImg = new Image();
-      logoImg.src = '/shop-logo.jpeg';
+      logoImg.src = brand.logo;
       await new Promise<void>((resolve) => { logoImg.onload = () => resolve(); logoImg.onerror = () => resolve(); });
       if (logoImg.naturalWidth > 0) {
         const logoH = 104;
@@ -1621,6 +1637,19 @@ export default function App() {
         logoRaster = canvasToEscPosRaster(logoCanvas);
       }
     } catch (_) {}
+
+    // One centred line of text drawn as an image (shop name / tagline / footer in Marathi)
+    const textRaster = (text: string, px: number, bold: boolean): Uint8Array => {
+      const PW = 576;
+      const c = document.createElement('canvas');
+      c.width = PW; c.height = Math.round(px * 1.6);
+      const ctx = c.getContext('2d')!;
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+      ctx.fillStyle = '#000'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.font = `${bold ? 'bold ' : ''}${px}px "Noto Sans Devanagari", sans-serif`;
+      ctx.fillText(text, PW / 2, c.height / 2, PW - 8);
+      return canvasToEscPosRaster(c);
+    };
 
     // Auto-detect Devanagari text for raster printing, or allow explicit markers.
     const containsDevanagari = (s?: string) => {
@@ -1729,7 +1758,7 @@ export default function App() {
       || isBitmapMarker(receipt.customerName || '');
 
     if (!markerExists) {
-      try { await btSend(buildEscPos(receipt, isShortBillMode, undefined, logoRaster)); }
+      try { await btSend(buildEscPos(receipt, isShortBillMode, undefined, logoRaster, textRaster)); }
       catch (err: any) { alert(`Print failed: ${err.message}`); }
       return;
     }
@@ -1751,7 +1780,7 @@ export default function App() {
     };
 
     try {
-      await btSend(buildEscPos(receipt, isShortBillMode, rasterProvider, logoRaster));
+      await btSend(buildEscPos(receipt, isShortBillMode, rasterProvider, logoRaster, textRaster));
     } catch (err: any) {
       alert(`Print failed: ${err.message}`);
     }
@@ -2063,7 +2092,7 @@ export default function App() {
       {/* Sidebar */}
       <div className={`sidebar${sidebarOpen ? ' open' : ''}`}>
         <div style={{ padding: '1.2rem 1.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <h3 style={{ fontWeight: 'bold', margin: 0, fontSize: '1.1rem' }}>Rajendra GVB</h3>
+          <h3 style={{ fontWeight: 'bold', margin: 0, fontSize: '1.1rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{brand.name}</h3>
           {/* Close button — mobile only, hidden on desktop via CSS would need extra class; simple X works everywhere */}
           <button onClick={() => setSidebarOpen(false)} style={{ background: 'transparent', border: 'none', color: 'white', fontSize: '1.3rem', cursor: 'pointer', lineHeight: 1, padding: 4 }}>✕</button>
         </div>
@@ -2647,8 +2676,8 @@ export default function App() {
               /* ── Receipt detail view ── */
               <div className="card" style={{ padding: '16px' }}>
                 <div style={{ textAlign: 'center', borderBottom: '2px solid #000', paddingBottom: '10px', marginBottom: '10px' }}>
-                  <div style={{ fontWeight: 'bold', fontSize: '1.15rem' }}>RAJENDRA GVB</div>
-                  <div style={{ fontSize: '0.75rem', color: '#555' }}>Fresh Groceries & More</div>
+                  <div style={{ fontWeight: 'bold', fontSize: '1.15rem' }}>{brand.name.toUpperCase()}</div>
+                  {brand.tagline && <div style={{ fontSize: '0.75rem', color: '#555' }}>{brand.tagline}</div>}
                   <div style={{ fontWeight: 'bold', marginTop: '6px' }}>BILL: {viewingReceipt.receipt_no}</div>
                   <div style={{ fontSize: '0.78rem', color: '#666' }}>{viewingReceipt.date}</div>
                   {(viewingReceipt.customerName || viewingReceipt.customerPhone) && (
@@ -3684,10 +3713,12 @@ export default function App() {
             {/* Visible receipt card — mimics 80mm thermal output */}
             <div ref={receiptCardRef} style={{ background: '#fff', padding: '12px 14px', borderRadius: '8px', border: '1px solid #ddd', marginBottom: '12px', fontFamily: "'Courier New', Courier, monospace", fontSize: '11px', lineHeight: 1.4 }}>
               <div style={{ fontWeight: 'bold', fontSize: '15px', textAlign: 'center', letterSpacing: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
-                <img src="/shop-logo.jpeg" alt="" style={{ height: '22px', width: 'auto' }} />
-                RAJENDRA GVB
+                {brand.logo && <img src={brand.logo} alt="" style={{ height: '22px', width: 'auto' }} />}
+                {brand.name.toUpperCase()}
               </div>
-              <div style={{ fontSize: '9px', textAlign: 'center', color: '#555', marginBottom: '6px' }}>Fresh Groceries &amp; More</div>
+              <div style={{ fontSize: '9px', textAlign: 'center', color: '#555', marginBottom: '6px' }}>
+                {[brand.tagline, brand.address, brand.phone && `Ph: ${brand.phone}`].filter(Boolean).join(' · ')}
+              </div>
               <div style={{ borderTop: '2px solid #000', borderBottom: '1px dashed #aaa', padding: '5px 0', margin: '0 0 6px 0', fontSize: '10px' }}>
                 <div>Bill No : <b>{lastReceipt.receipt_no}</b></div>
                 <div>Date    : {lastReceipt.date}</div>
@@ -3719,7 +3750,7 @@ export default function App() {
                 <span>TOTAL</span>
                 <span>Rs.{lastReceipt.total.toFixed(2)}</span>
               </div>
-              <div style={{ textAlign: 'center', marginTop: '8px', fontSize: '8px', color: '#888' }}>*** Thank You — Visit Again! ***</div>
+              <div style={{ textAlign: 'center', marginTop: '8px', fontSize: '8px', color: '#888' }}>*** {brand.footer} ***</div>
             </div>
 
             {/* Share action buttons */}
@@ -3787,8 +3818,9 @@ export default function App() {
         {lastReceipt && (
           <>
             {/* Store header */}
-            <div className="rp-store-name"><img src="/shop-logo.jpeg" className="rp-logo" alt="" />RAJENDRA GVB</div>
-            <div className="rp-sub">Fresh Groceries &amp; More</div>
+            <div className="rp-store-name">{brand.logo && <img src={brand.logo} className="rp-logo" alt="" />}{brand.name.toUpperCase()}</div>
+            {brand.tagline && <div className="rp-sub">{brand.tagline}</div>}
+            {(brand.address || brand.phone) && <div className="rp-sub">{[brand.address, brand.phone && `Ph: ${brand.phone}`].filter(Boolean).join(' · ')}</div>}
             <hr className="rp-divider-solid" />
 
             {/* Bill meta */}
@@ -3829,7 +3861,7 @@ export default function App() {
             <hr className="rp-divider" />
 
             <div className="rp-footer">
-              *** Thank You — Visit Again! ***
+              *** {brand.footer} ***
             </div>
           </>
         )}

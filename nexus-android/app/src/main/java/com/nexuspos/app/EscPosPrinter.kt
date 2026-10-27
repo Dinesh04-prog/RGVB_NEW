@@ -7,6 +7,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Typeface
+import android.util.Base64
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -45,8 +46,16 @@ object EscPosPrinter {
 
     // ── Public entry point ────────────────────────────────────────────────────
 
+    @Suppress("UNUSED_PARAMETER")
     fun buildReceipt(json: JSONObject, context: Context): ByteArray {
         val out = ByteArrayOutputStream()
+        // The shop's own name, tagline, address, phone, footer and logo come with every receipt (web app → "shop")
+        val shop     = json.optJSONObject("shop")
+        val shopName = shop?.optString("name", "").orEmpty().trim()
+        val tagline  = shop?.optString("tagline", "").orEmpty().trim()
+        val address  = shop?.optString("address", "").orEmpty().trim()
+        val phoneNo  = shop?.optString("phone", "").orEmpty().trim()
+        val footer   = shop?.optString("footer", "").orEmpty().trim().ifEmpty { "Thank You - Visit Again!" }
 
         fun w(b: ByteArray) = out.write(b)
         fun nl()            = w(LF)
@@ -58,13 +67,19 @@ object EscPosPrinter {
 
         // ── Company logo ──────────────────────────────────────────────────────
         w(ALIGN_CTR)
-        renderLogo(context)?.let { w(it) }
+        renderLogo(shop?.optString("logo", "").orEmpty())?.let { w(it) }
 
         // ── Shop header ───────────────────────────────────────────────────────
-        w(ALIGN_CTR); w(BOLD_ON); w(DBL_WH)
-        line("RAJENDRA GVB")
-        w(NORMAL_SIZE); w(BOLD_OFF)
-        line("Kirana & Grocery Store")
+        // Plain English in the printer's font; anything else (Marathi…) drawn as an image
+        w(ALIGN_CTR)
+        if (shopName.isNotEmpty()) {
+            if (isPrinterText(shopName)) { w(BOLD_ON); w(DBL_WH); line(shopName.uppercase()); w(NORMAL_SIZE); w(BOLD_OFF) }
+            else w(renderCenteredText(shopName, 34f, true))
+        }
+        for (extra in listOf(tagline, address, if (phoneNo.isNotEmpty()) "Ph: $phoneNo" else "")) {
+            if (extra.isEmpty()) continue
+            if (isPrinterText(extra)) line(extra) else w(renderCenteredText(extra, 22f, false))
+        }
         divider()
 
         // ── Bill meta ─────────────────────────────────────────────────────────
@@ -109,7 +124,8 @@ object EscPosPrinter {
 
         // ── Footer ────────────────────────────────────────────────────────────
         w(ALIGN_CTR)
-        line("* Thank You -- Visit Again! *")
+        val footerText = footer.replace("—", "-")
+        if (isPrinterText(footerText)) line("* $footerText *") else w(renderCenteredText(footer, 22f, false))
 
         w(FEED_CUT)
         return out.toByteArray()
@@ -117,12 +133,12 @@ object EscPosPrinter {
 
     // ── Bitmap row renderers ──────────────────────────────────────────────────
 
-    /** Loads shop-logo.jpeg from assets, scales to 180px wide, centers on paper. */
-    private fun renderLogo(context: Context): ByteArray? {
+    /** The shop's logo (a "data:image/jpeg;base64,…" URL from the shop settings), 90 px wide, centred. None → null. */
+    private fun renderLogo(dataUrl: String): ByteArray? {
+        if (dataUrl.isBlank()) return null
         return try {
-            val raw = context.assets.open("shop-logo.jpeg").use {
-                BitmapFactory.decodeStream(it)
-            } ?: return null
+            val bytes = Base64.decode(dataUrl.substringAfter(','), Base64.DEFAULT)
+            val raw = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
 
             val logoW = 90
             val logoH = (raw.height.toFloat() * logoW / raw.width).toInt()
@@ -214,7 +230,28 @@ object EscPosPrinter {
         return bitmapLineToEscPos(bm).also { bm.recycle() }
     }
 
+    /** One centred line drawn as an image, for text the printer font cannot show (Marathi shop name, footer…). */
+    private fun renderCenteredText(text: String, fontSize: Float, bold: Boolean): ByteArray {
+        val h  = (fontSize * 1.6f).toInt()
+        val bm = Bitmap.createBitmap(PAPER_W, h, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bm)
+        canvas.drawColor(Color.WHITE)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color     = Color.BLACK
+            textSize  = fontSize
+            textAlign = Paint.Align.CENTER
+            typeface  = if (bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+        }
+        // Shrink long names to fit the paper
+        while (paint.measureText(text) > PAPER_W - 8 && paint.textSize > 14f) paint.textSize -= 1f
+        val baseline = h / 2f - (paint.descent() + paint.ascent()) / 2f
+        canvas.drawText(text, PAPER_W / 2f, baseline, paint)
+        return bitmapLineToEscPos(bm).also { bm.recycle() }
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private fun isPrinterText(s: String) = s.all { it.code in 0x20..0x7E }
 
     private fun wrapText(text: String, paint: Paint, maxW: Float): List<String> {
         val words = text.split(" ")

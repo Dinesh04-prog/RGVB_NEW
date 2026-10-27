@@ -7,6 +7,8 @@ import {
 } from '../lib/firebase';
 import { openExternalUrl } from '../lib/androidApp';
 import { APP_NAME } from '../lib/appInfo';
+import { brandOf } from '../lib/shopBrand';
+import ShopDetailsForm from './ShopDetailsForm';
 
 // Owner → ☰ → Shop: add cashiers by Gmail (or a join code), who is in the shop, and the one-time import of the old
 // shared inventory.
@@ -37,6 +39,7 @@ export default function ShopPanel({ shopItemCount }: { shopItemCount: number }) 
   const [copied, setCopied] = useState(false);
   const [legacyCount, setLegacyCount] = useState(0);
   const [importStatus, setImportStatus] = useState('');
+  const [editing, setEditing] = useState(false);
   const [invites, setInvites] = useState<ShopInvite[]>([]);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteError, setInviteError] = useState('');
@@ -52,6 +55,7 @@ export default function ShopPanel({ shopItemCount }: { shopItemCount: number }) 
   }, [copied]);
 
   if (!shop || !user) return null;
+  const brand = brandOf(shop);
 
   const inviteText =
     `Join ${shop.name} on ${APP_NAME}.\n1. Open the app and sign in with Google\n2. Tap "Join with a code"\n3. Enter code: ${shop.joinCode}`;
@@ -99,10 +103,25 @@ export default function ShopPanel({ shopItemCount }: { shopItemCount: number }) 
       <style dangerouslySetInnerHTML={{ __html: CSS }} />
 
       <div className="sp-card">
-        <div className="sp-title">🏪 {shop.name}</div>
-        {shop.address && <div className="sp-note">📍 {shop.address}</div>}
-        {shop.phone && <div className="sp-note">📞 {shop.phone}</div>}
-        {shop.whatsapp && <div className="sp-note">💬 WhatsApp for bill approvals: {shop.whatsapp}</div>}
+        {editing ? (
+          <>
+            <div className="sp-title">✏️ Shop details (printed on every bill)</div>
+            <ShopDetailsForm shop={shop} onDone={() => setEditing(false)} />
+          </>
+        ) : (
+          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+            {brand.logo && <img src={brand.logo} alt="" style={{ width: 56, height: 56, objectFit: 'contain', borderRadius: 8, flexShrink: 0 }} />}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div className="sp-title" style={{ marginBottom: 2 }}>🏪 {brand.name}</div>
+              {brand.tagline && <div className="sp-note">{brand.tagline}</div>}
+              {brand.address && <div className="sp-note">📍 {brand.address}</div>}
+              {brand.phone && <div className="sp-note">📞 {brand.phone}</div>}
+              {brand.whatsapp && <div className="sp-note">💬 WhatsApp for bill approvals: {brand.whatsapp}</div>}
+              <div className="sp-note">🧾 Bills: {brand.billPrefix}-DDMM-001 · {brand.upiId ? `UPI: ${brand.upiId}` : 'No UPI ID yet'}</div>
+            </div>
+            <button className="sp-btn outline" style={{ flex: '0 0 auto', minWidth: 0 }} onClick={() => setEditing(true)}>✏️ Edit</button>
+          </div>
+        )}
       </div>
 
       <div className="sp-card">

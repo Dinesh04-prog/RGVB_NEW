@@ -8,6 +8,8 @@ interface Props {
   onChange: (image: string | null) => void;
   /** yellow "auto-filled, please check" background from the photo scan */
   highlight?: CSSProperties;
+  /** Heading above the buttons (default "PICTURE (Optional)") */
+  label?: string;
 }
 
 const btn: CSSProperties = {
@@ -15,7 +17,7 @@ const btn: CSSProperties = {
   border: '1.5px solid #0d6efd', background: '#fff', color: '#0d6efd', display: 'inline-flex', alignItems: 'center', gap: 4,
 };
 
-export function ItemImageField({ image, onChange, highlight }: Props) {
+export function ItemImageField({ image, onChange, highlight, label = 'PICTURE (Optional)' }: Props) {
   const cameraRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const [picking, setPicking] = useState(false);
@@ -54,7 +56,7 @@ export function ItemImageField({ image, onChange, highlight }: Props) {
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#6c757d', marginBottom: 4 }}>
-          PICTURE (Optional){image ? ` · ${formatKb(size)}` : ''}
+          {label}{image ? ` · ${formatKb(size)}` : ''}
         </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           <button type="button" style={btn} disabled={busy} onClick={() => cameraRef.current?.click()}>📷 Take photo</button>

@@ -59,6 +59,12 @@ export interface Shop {
   ownerUid: string;
   joinCode: string;      // 6 digits a cashier types to join
   createdAt: number;
+  // Receipt settings (owner → Shop & Cashiers → Edit); see lib/shopBrand.ts for the defaults
+  tagline?: string;
+  receiptFooter?: string;
+  billPrefix?: string;
+  upiId?: string;
+  logo?: string;         // small JPEG data URL (≤ 25 KB, same limits as item pictures)
 }
 
 /** shops/{shopId}/members/{uid} — who may use the shop, and as what. */
