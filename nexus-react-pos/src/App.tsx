@@ -10,7 +10,7 @@ import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
 import Fuse from "fuse.js";
 import localforage from 'localforage';
 import html2canvas from 'html2canvas';
-import { saveSale, getSalesHistory } from "./lib/db";
+import { saveSale, getSalesHistory, backupSalesToCloud, salesBackupStatus, restoreSalesFromCloud, getDeviceLetter } from "./lib/db";
 import type { CartItem, Receipt } from "./lib/db";
 import { translateHinglishToMarathi, transliterateDevanagariToLatin, normalizeForSearch, HINGLISH_TO_MARATHI, parseUserQuery, scoreCandidate } from "./lib/phonetic";
 import { itemNameFields, makeSearchKey, withItemNames } from "./lib/itemNames";
@@ -50,6 +50,17 @@ export default function App() {
   const { user, shop, logout } = useAuth();
   // Shop name, tagline, footer, logo, bill prefix… from the owner's shop settings (lib/shopBrand.ts)
   const brand = brandOf(shop);
+
+  // Bills in the cloud: copy what is not there yet (bills from before this version too) and claim this phone's letter
+  const [cloudBills, setCloudBills] = useState<{ total: number; backedUp: number } | null>(null);
+  const [cloudMsg, setCloudMsg] = useState('');
+  const [cloudBusy, setCloudBusy] = useState(false);
+  const refreshCloudBills = () => salesBackupStatus().then(setCloudBills).catch(() => {});
+  useEffect(() => {
+    if (!isFirebaseReady) return;
+    getDeviceLetter().catch(() => {});
+    backupSalesToCloud().then(refreshCloudBills);
+  }, []);
   const [activeTab, setActiveTab] = useState("billing");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
@@ -1008,7 +1019,9 @@ export default function App() {
     }
     
     await localforage.setItem('bill_counter', { date: dateKey, count });
-    return `${brand.billPrefix}-${day}${month}-${count.toString().padStart(3, '0')}`;
+    // This phone's letter keeps numbers unique when several phones bill on the same day: TK-2810-A001, TK-2810-B001
+    const letter = isFirebaseReady ? await getDeviceLetter() : '';
+    return `${brand.billPrefix}-${day}${month}-${letter}${count.toString().padStart(3, '0')}`;
   };
 
   const checkout = async () => {
@@ -2832,6 +2845,45 @@ export default function App() {
                 Refresh
               </button>
             </div>
+
+            {isFirebaseReady && (
+              <div className="card" style={{ marginTop: '20px', padding: '20px', textAlign: 'left' }}>
+                <h4 style={{ margin: 0, color: '#0a3d62', fontWeight: 'bold' }}>☁️ BILLS IN THE CLOUD</h4>
+                <p style={{ fontSize: '0.85rem', color: '#6c757d', margin: '6px 0 12px' }}>
+                  Every bill is copied to the cloud automatically (later, if there is no internet). On a new or reset phone, restore them here.
+                </p>
+                {cloudBills && (
+                  <div style={{ fontWeight: 700, color: cloudBills.backedUp === cloudBills.total ? '#16A34A' : '#b45309', marginBottom: 12 }}>
+                    {cloudBills.backedUp === cloudBills.total
+                      ? `✅ All ${cloudBills.total} bills on this phone are in the cloud`
+                      : `⏳ ${cloudBills.backedUp} of ${cloudBills.total} bills in the cloud — the rest go when there is internet`}
+                  </div>
+                )}
+                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                  <button disabled={cloudBusy}
+                    onClick={async () => { setCloudBusy(true); setCloudMsg(''); await backupSalesToCloud(); await refreshCloudBills(); setCloudBusy(false); }}
+                    style={{ flex: 1, minWidth: 150, minHeight: 46, background: '#0a3d62', color: 'white', border: 'none', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer' }}>
+                    ⬆️ Back up now
+                  </button>
+                  <button disabled={cloudBusy}
+                    onClick={async () => {
+                      setCloudBusy(true); setCloudMsg('⏳ Getting bills from the cloud…');
+                      try {
+                        const added = await restoreSalesFromCloud();
+                        setCloudMsg(added ? `✅ ${added} bills restored to this phone.` : '✅ This phone already has every bill.');
+                        getSalesHistory().then((sales: Receipt[]) => setTotalProfit(sales.reduce((a: number, b: Receipt) => a + b.total, 0)));
+                      } catch (err) {
+                        console.error(err); setCloudMsg('⚠️ Could not reach the cloud. Check the internet and try again.');
+                      }
+                      await refreshCloudBills(); setCloudBusy(false);
+                    }}
+                    style={{ flex: 1, minWidth: 150, minHeight: 46, background: 'white', color: '#0a3d62', border: '1.5px solid #0a3d62', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer' }}>
+                    ⬇️ Restore bills from cloud
+                  </button>
+                </div>
+                {cloudMsg && <div style={{ marginTop: 10, fontSize: '0.9rem', fontWeight: 600, color: '#0a3d62' }}>{cloudMsg}</div>}
+              </div>
+            )}
 
             <div className="card" style={{ marginTop: '20px', padding: '20px', background: '#f8f9fa', border: '1px dashed #6c757d' }}>
               <h4 style={{ margin: 0, color: '#333', fontWeight: 'bold' }}>💾 SYSTEM BACKUP & RESTORE</h4>

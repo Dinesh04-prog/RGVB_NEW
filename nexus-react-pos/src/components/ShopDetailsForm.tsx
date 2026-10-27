@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { updateShop, type Shop } from '../lib/firebase';
+import { updateShop, writeOrQueue, type Shop } from '../lib/firebase';
 import { brandOf, cleanBillPrefix, isValidUpiId, DEFAULT_FOOTER, DEFAULT_BILL_PREFIX } from '../lib/shopBrand';
 import { ItemImageField } from './ItemImageField';
 
@@ -41,11 +41,12 @@ export default function ShopDetailsForm({ shop, onDone }: Props) {
     if (upiBad) { setError('The UPI ID looks wrong. It is like shopname@okaxis.'); return; }
     setSaving(true); setError('');
     try {
-      await updateShop(shop.id, {
+      // Offline: saved on this phone and sent when the internet is back (the screen does not wait for it)
+      await writeOrQueue(updateShop(shop.id, {
         name: name.trim(), tagline: tagline.trim(), address: address.trim(), phone: digits(phone),
         whatsapp: waNumber(whatsapp || phone), billPrefix: cleanBillPrefix(billPrefix) || DEFAULT_BILL_PREFIX,
         receiptFooter: footer.trim(), upiId: upiId.trim(), logo: logo || '',
-      });
+      }));
       onDone();
     } catch (err) {
       console.error(err);

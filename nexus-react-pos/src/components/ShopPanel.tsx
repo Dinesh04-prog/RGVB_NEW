@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import {
   changeJoinCode, removeMember, subscribeToMembers, legacyInventoryCount, importLegacyInventory,
-  inviteCashier, cancelInvite, subscribeToInvites,
+  inviteCashier, cancelInvite, subscribeToInvites, writeOrQueue,
   type ShopMember, type ShopInvite,
 } from '../lib/firebase';
 import { openExternalUrl } from '../lib/androidApp';
@@ -81,7 +81,7 @@ export default function ShopPanel({ shopItemCount }: { shopItemCount: number }) 
     if (!email) return;
     if (members.some(m => m.email.toLowerCase() === email)) { setInviteError('This person is already in the shop.'); return; }
     setBusy(true); setInviteError('');
-    try { await inviteCashier(shop, user.uid, email); setInviteEmail(''); }
+    try { await writeOrQueue(inviteCashier(shop, user.uid, email)); setInviteEmail(''); }
     catch (err) { console.error(err); setInviteError(err instanceof Error ? err.message : 'Could not add. Check the internet connection.'); }
     finally { setBusy(false); }
   };

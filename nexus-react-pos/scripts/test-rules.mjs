@@ -68,6 +68,17 @@ await check('cashier cannot edit the shop profile', () => assertFails(cashier.do
 await check('cashier cannot remove the owner', () => assertFails(cashier.doc('shops/shopA/members/ownerA').delete()));
 await check('cashier cannot change the join code', () => assertFails(cashier.doc('joinCodes/111111').delete()));
 
+console.log('Bill backups');
+const sale = { receipt_no: 'TK-2810-A001', date: '28/10/2026', items: [], total: 45, cashierUid: 'cashierA', cashierName: 'c', ts: 1 };
+await check('cashier backs up a bill', () => assertSucceeds(cashier.doc('shops/shopA/sales/TK-2810-A001_2026').set(sale)));
+await check('cashier re-uploads their own bill', () => assertSucceeds(cashier.doc('shops/shopA/sales/TK-2810-A001_2026').set({ ...sale, total: 46 })));
+await check('cannot upload a bill under another name', () => assertFails(cashier.doc('shops/shopA/sales/X_2026').set({ ...sale, cashierUid: 'ownerA' })));
+await check('cashier reads the shop bills (restore)', () => assertSucceeds(cashier.collection('shops/shopA/sales').get()));
+await check('other shop cannot read the bills', () => assertFails(ownerB.collection('shops/shopA/sales').get()));
+await check('cashier cannot delete a bill', () => assertFails(cashier.doc('shops/shopA/sales/TK-2810-A001_2026').delete()));
+await check('cashier takes the next phone letter', () => assertSucceeds(cashier.doc('shops/shopA/counters/devices').set({ next: 1 })));
+await check('other shop cannot touch the counter', () => assertFails(ownerB.doc('shops/shopA/counters/devices').set({ next: 9 })));
+
 console.log('Owner of shop A');
 await check('owner approves the bill', () => assertSucceeds(ownerA.doc('shops/shopA/reviews/r1').update({ status: 'approved', updatedCart: [], approvedAt: 2 })));
 await check('owner edits the shop profile', () => assertSucceeds(ownerA.doc('shops/shopA').update({ name: 'Shop A renamed' })));
@@ -81,6 +92,7 @@ await check('owner changes the join code', () => {
 });
 await check('old code no longer joins', () => assertFails(stranger.doc('shops/shopA/members/stranger').set({ uid: 'stranger', role: 'cashier', joinCode: '111111', joinedAt: 1 })));
 await check('owner record cannot be deleted', () => assertFails(ownerA.doc('shops/shopA/members/ownerA').delete()));
+await check('owner deletes a bill', () => assertSucceeds(ownerA.doc('shops/shopA/sales/TK-2810-A001_2026').delete()));
 await check('owner removes the cashier', () => assertSucceeds(ownerA.doc('shops/shopA/members/cashierA').delete()));
 await check('removed cashier loses access', () => assertFails(cashier.collection('shops/shopA/inventory').get()));
 await check('removed cashier can still see they are no longer a member', () => assertSucceeds(cashier.doc('shops/shopA/members/cashierA').get()));

@@ -1,15 +1,15 @@
 import { initializeApp, getApps } from 'firebase/app';
 import {
-  initializeAuth, indexedDBLocalPersistence, browserLocalPersistence, connectAuthEmulator,
+  initializeAuth, getAuth, indexedDBLocalPersistence, browserLocalPersistence, connectAuthEmulator,
   GoogleAuthProvider, signInWithCredential, signOut, onAuthStateChanged, type User,
 } from 'firebase/auth';
 import {
-  initializeFirestore, persistentLocalCache, persistentMultipleTabManager, connectFirestoreEmulator, CACHE_SIZE_UNLIMITED,
-  doc, getDoc, getDocs, getDocsFromCache, setDoc, updateDoc, deleteDoc, writeBatch,
+  initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager, connectFirestoreEmulator, CACHE_SIZE_UNLIMITED,
+  doc, getDoc, getDocs, getDocsFromCache, setDoc, updateDoc, deleteDoc, writeBatch, runTransaction,
   onSnapshot, collection, query, where, orderBy, limit, getCountFromServer, serverTimestamp, Timestamp,
   type QueryDocumentSnapshot,
 } from 'firebase/firestore';
-import type { CartItem } from './db';
+import type { CartItem, Receipt } from './db';
 
 export interface InventoryItem {
   id: string;
@@ -97,27 +97,42 @@ export const isFirebaseReady = !!(cfg.apiKey && cfg.projectId);
 /** Local testing against the Firebase emulators (`npm run emulators`); never set in a real build. */
 export const usingEmulators = import.meta.env.VITE_USE_EMULATORS === '1';
 
+// Started once per page. When the dev server hot-reloads this file, the running instances are reused
+// (starting Firebase a second time fails and would cut the page's database connection).
+const alreadyStarted = getApps().length > 0;
 const firebaseApp = isFirebaseReady
-  ? (getApps().length ? getApps()[0] : initializeApp(cfg))
+  ? (alreadyStarted ? getApps()[0] : initializeApp(cfg))
   : null;
 
 // No popup/redirect resolver: sign-in uses the Google ID token from the sign-in button (works inside the Android WebView)
 const auth = firebaseApp
-  ? initializeAuth(firebaseApp, { persistence: [indexedDBLocalPersistence, browserLocalPersistence] })
+  ? (alreadyStarted ? getAuth(firebaseApp)
+    : initializeAuth(firebaseApp, { persistence: [indexedDBLocalPersistence, browserLocalPersistence] }))
   : null;
 
 // Offline cache on the phone: billing keeps working without internet, writes sync later. Never trimmed, because the
 // inventory sync below reads the cached items instead of downloading them again (see subscribeToInventory).
 export const db = firebaseApp
-  ? initializeFirestore(firebaseApp, {
+  ? (alreadyStarted ? getFirestore(firebaseApp) : initializeFirestore(firebaseApp, {
     localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager(), cacheSizeBytes: CACHE_SIZE_UNLIMITED }),
-  })
+  }))
   : null;
 
-if (usingEmulators && auth && db) {
+if (usingEmulators && auth && db && !alreadyStarted) {
   connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
   connectFirestoreEmulator(db, '127.0.0.1', 8080);
 }
+
+/**
+ * Waits for a Firestore write at most `ms`. Offline (or a very slow line) the write stays queued on the phone and is
+ * sent later, so the screen should not keep waiting for it: resolves `false` then (and `true` when the server has it).
+ * A refusal (e.g. permission) still throws.
+ */
+export const writeOrQueue = (write: Promise<unknown>, ms = 4000): Promise<boolean> => {
+  const done = write.then(() => true);
+  done.catch(err => console.error('Write failed:', err));   // also reported when it fails after the screen moved on
+  return Promise.race([done, new Promise<boolean>(res => setTimeout(() => res(false), ms))]);
+};
 
 // ── Sign-in ──────────────────────────────────────────────────────────────────
 
@@ -151,11 +166,12 @@ let activeShopId: string | null = null;
 export const setActiveShop = (shopId: string | null) => { activeShopId = shopId; };
 export const getActiveShopId = () => activeShopId;
 
-const shopCol = (name: 'inventory' | 'reviews' | 'members') => {
+type ShopCollection = 'inventory' | 'reviews' | 'members' | 'sales' | 'counters';
+const shopCol = (name: ShopCollection) => {
   if (!db || !activeShopId) throw new Error('No shop selected');
   return collection(db, 'shops', activeShopId, name);
 };
-const shopDoc = (name: 'inventory' | 'reviews' | 'members', id: string) => doc(shopCol(name), id);
+const shopDoc = (name: ShopCollection, id: string) => doc(shopCol(name), id);
 const ready = () => !!(db && activeShopId);
 
 // ── Shops, members and join codes ────────────────────────────────────────────
@@ -467,4 +483,64 @@ export const bulkSaveInventoryToFirestore = async (
     await batch.commit();
     onProgress?.(Math.min(i + CHUNK, items.length), items.length);
   }
+};
+
+// ── Bills (sales) backup ─────────────────────────────────────────────────────
+//
+// Every bill is kept on the phone first (lib/db.ts) and copied to shops/{id}/sales so a lost or new phone can get them
+// back. The document id is the bill number plus the year: older bill numbers (AA-DDMM-###) repeat every year.
+
+export const saleDocId = (r: Receipt) => {
+  const year = (r.date.match(/\b(20\d\d)\b/) || [])[1];
+  return `${r.receipt_no}${year ? `_${year}` : ''}`.replace(/\//g, '-');
+};
+
+/** Uploads bills (batches of 400). Resolves when the server has them; offline the upload waits and goes later. */
+export const uploadSales = async (receipts: Receipt[]) => {
+  const me = auth?.currentUser;
+  if (!ready() || !me || receipts.length === 0) return;
+  for (let i = 0; i < receipts.length; i += 400) {
+    const batch = writeBatch(db!);
+    receipts.slice(i, i + 400).forEach(r => {
+      // Firestore refuses `undefined` values (e.g. no customer name)
+      const clean = JSON.parse(JSON.stringify(r)) as Receipt;
+      batch.set(shopDoc('sales', saleDocId(r)), {
+        ...clean, cashierUid: me.uid, cashierName: me.displayName || me.email || '', savedAt: serverTimestamp(), ts: Date.now(),
+      });
+    });
+    await batch.commit();
+  }
+};
+
+/** All of the shop's bills from the cloud, oldest first (one read per bill: used only for "Restore"). */
+export const downloadSales = async (): Promise<Receipt[]> => {
+  if (!ready()) return [];
+  const snap = await getDocs(shopCol('sales'));
+  return snap.docs
+    .sort((a, b) => (a.get('ts') || 0) - (b.get('ts') || 0))
+    .map(d => {
+      const r = { ...d.data() };
+      for (const cloudOnly of ['ts', 'cashierUid', 'cashierName', 'savedAt']) delete r[cloudOnly];
+      return r as Receipt;
+    });
+};
+
+// ── This phone's letter in bill numbers ──────────────────────────────────────
+
+const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+/** A letter for this phone, unique in the shop (A for the first phone, B for the next…). Null when offline. */
+export const claimDeviceLetter = async (): Promise<string | null> => {
+  if (!ready()) return null;
+  try {
+    // Never keep a bill waiting on a slow line: no answer in 3 s → null (a stand-in letter is used for now)
+    const timeout = new Promise<null>(res => setTimeout(() => res(null), 3000));
+    return await Promise.race([timeout, runTransaction(db!, async tx => {
+      const ref = shopDoc('counters', 'devices');
+      const snap = await tx.get(ref);
+      const next = snap.exists() ? Number(snap.data().next || 0) : 0;
+      tx.set(ref, { next: next + 1 });
+      return LETTERS[next % LETTERS.length];
+    })]);
+  } catch { return null; }
 };
