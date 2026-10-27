@@ -4,9 +4,10 @@ import {
   GoogleAuthProvider, signInWithCredential, signOut, onAuthStateChanged, type User,
 } from 'firebase/auth';
 import {
-  initializeFirestore, persistentLocalCache, persistentMultipleTabManager, connectFirestoreEmulator,
-  doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, writeBatch,
-  onSnapshot, collection, query, where, orderBy, limit, getCountFromServer,
+  initializeFirestore, persistentLocalCache, persistentMultipleTabManager, connectFirestoreEmulator, CACHE_SIZE_UNLIMITED,
+  doc, getDoc, getDocs, getDocsFromCache, setDoc, updateDoc, deleteDoc, writeBatch,
+  onSnapshot, collection, query, where, orderBy, limit, getCountFromServer, serverTimestamp, Timestamp,
+  type QueryDocumentSnapshot,
 } from 'firebase/firestore';
 import type { CartItem } from './db';
 
@@ -99,9 +100,12 @@ const auth = firebaseApp
   ? initializeAuth(firebaseApp, { persistence: [indexedDBLocalPersistence, browserLocalPersistence] })
   : null;
 
-// Offline cache on the phone: billing keeps working without internet, writes sync later
+// Offline cache on the phone: billing keeps working without internet, writes sync later. Never trimmed, because the
+// inventory sync below reads the cached items instead of downloading them again (see subscribeToInventory).
 export const db = firebaseApp
-  ? initializeFirestore(firebaseApp, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) })
+  ? initializeFirestore(firebaseApp, {
+    localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager(), cacheSizeBytes: CACHE_SIZE_UNLIMITED }),
+  })
   : null;
 
 if (usingEmulators && auth && db) {
@@ -306,7 +310,7 @@ export const legacyInventoryCount = async (): Promise<number> => {
 export const importLegacyInventory = async (onProgress?: (done: number, total: number) => void): Promise<number> => {
   if (!db || !activeShopId) throw new Error('No shop selected');
   const snap = await getDocs(collection(db, 'inventory'));
-  const items = snap.docs.map(d => { const data = { ...d.data() }; delete data._updatedAt; return { ...data, id: d.id } as InventoryItem; });
+  const items = snap.docs.filter(d => !d.get('deleted')).map(d => ({ ...toItem(d), id: d.id }));
   await bulkSaveInventoryToFirestore(items, onProgress);
   return items.length;
 };
@@ -377,32 +381,70 @@ export const subscribeToReviewsSince = (
 };
 
 // ── Inventory cloud sync ─────────────────────────────────────────────────────
+//
+// Kept cheap for the free plan: every item carries `_updatedAt` (the server's clock, so a phone with a wrong clock
+// cannot hide its changes), deleting leaves a small `{ deleted: true }` marker instead of removing the document,
+// and a phone reads its cached items for free and then asks the server only for items changed since the newest one
+// it has. A phone downloads the whole list once, the first time it opens the shop.
+
+const toItem = (d: QueryDocumentSnapshot): InventoryItem => {
+  const data = { ...d.data() };
+  delete data._updatedAt;
+  delete data.deleted;
+  return data as InventoryItem;
+};
 
 // Save (add or edit) a single inventory item to Firestore.
 export const saveInventoryItemToCloud = async (item: InventoryItem) => {
   if (!ready()) return;
-  await setDoc(shopDoc('inventory', item.id), { ...item, _updatedAt: Date.now() });
+  await setDoc(shopDoc('inventory', item.id), { ...item, _updatedAt: serverTimestamp() });
 };
 
-// Delete an item from Firestore.
+// Delete an item: a marker every phone picks up on its next sync.
 export const removeInventoryItemFromCloud = async (id: string) => {
   if (!ready()) return;
-  await deleteDoc(shopDoc('inventory', id));
+  await setDoc(shopDoc('inventory', id), { id, deleted: true, _updatedAt: serverTimestamp() });
 };
 
-// Real-time listener for the full inventory collection.
+/** Live inventory of the active shop: cached items first, then only the changes from the server. */
 export const subscribeToInventory = (
   cb: (items: InventoryItem[]) => void
 ) => {
   if (!ready()) return () => {};
-  return onSnapshot(shopCol('inventory'), snap => {
-    const items = snap.docs.map(d => {
-      const data = { ...d.data() };
-      delete data._updatedAt;
-      return data as InventoryItem;
-    });
-    cb(items);
-  });
+  const col = shopCol('inventory');
+  const items = new Map<string, InventoryItem>();
+  const apply = (d: QueryDocumentSnapshot) => {
+    if (d.get('deleted')) items.delete(d.id); else items.set(d.id, toItem(d));
+  };
+  let stopped = false;
+  let stopListening = () => {};
+
+  (async () => {
+    // 1. Items already on this phone (no server reads)
+    let newest: Timestamp | null = null;
+    try {
+      const cached = await getDocsFromCache(col);
+      cached.docs.forEach(d => {
+        apply(d);
+        const t = d.get('_updatedAt');
+        if (t instanceof Timestamp && (!newest || t.toMillis() > newest.toMillis())) newest = t;
+      });
+      if (items.size > 0) cb([...items.values()]);
+    } catch { /* nothing cached yet */ }
+    const fromPhone = items.size;
+    if (stopped) return;
+
+    // 2. Only what changed since then (everything, the first time), and every later change live
+    const changes = newest ? query(col, where('_updatedAt', '>', newest)) : col;
+    stopListening = onSnapshot(changes, snap => {
+      // 'removed' = the document itself was deleted (older app versions deleted instead of marking)
+      snap.docChanges().forEach(c => { if (c.type === 'removed') items.delete(c.doc.id); else apply(c.doc); });
+      console.debug(`[sync] inventory: ${fromPhone} on this phone, ${snap.docChanges().length} downloaded`);
+      cb([...items.values()]);
+    }, err => console.error('Inventory sync failed:', err));
+  })();
+
+  return () => { stopped = true; stopListening(); };
 };
 
 // Batch-write all inventory items to Firestore (chunks of 500 to respect Firestore limits).
@@ -414,7 +456,7 @@ export const bulkSaveInventoryToFirestore = async (
   for (let i = 0; i < items.length; i += CHUNK) {
     const batch = writeBatch(db!);
     items.slice(i, i + CHUNK).forEach(item => {
-      batch.set(shopDoc('inventory', item.id), { ...item, _updatedAt: Date.now() });
+      batch.set(shopDoc('inventory', item.id), { ...item, _updatedAt: serverTimestamp() });
     });
     await batch.commit();
     onProgress?.(Math.min(i + CHUNK, items.length), items.length);
