@@ -11,6 +11,7 @@ rules_version = '2';
 //   shops/{shopId}/reviews/{id}       → bill approvals        cashiers send, only the owner approves / rejects
 //   shops/{shopId}/sales/{id}         → bill backups          members read; a cashier writes only their own
 //   shops/{shopId}/counters/{name}    → shared counters       members
+//   shops/{shopId}/khata/{key}        → udhaar accounts       members; /entries each udhaar or payment
 //
 // Test: npm run test:rules (runs against the local emulator, never the live database).
 
@@ -76,8 +77,9 @@ service cloud.firestore {
               || invitedTo(shopId)))
         );
         allow update: if false;
-        // The owner removes cashiers; anyone may leave; the owner record itself stays
-        allow delete: if resource.data.role != 'owner' && (isOwner(shopId) || request.auth.uid == uid);
+        // The owner removes cashiers; anyone may leave; the owner record goes only after the shop itself is deleted
+        allow delete: if (resource.data.role != 'owner' && (isOwner(shopId) || request.auth.uid == uid))
+          || (signedIn() && request.auth.uid == uid && !exists(shopPath(shopId)));
       }
 
       match /inventory/{itemId} {
@@ -91,6 +93,16 @@ service cloud.firestore {
         allow update: if isMember(shopId) && resource.data.cashierUid == request.auth.uid
           && request.resource.data.cashierUid == request.auth.uid;
         allow delete: if isOwner(shopId);
+      }
+
+      // Udhaar / khata: members record udhaar and payments; only the owner deletes or edits past entries
+      match /khata/{key} {
+        allow read, create, update: if isMember(shopId);
+        allow delete: if isOwner(shopId);
+        match /entries/{entryId} {
+          allow read, create: if isMember(shopId);
+          allow update, delete: if isOwner(shopId);
+        }
       }
 
       // Small shared counters, e.g. which letter the next phone gets in bill numbers

@@ -79,6 +79,14 @@ await check('cashier cannot delete a bill', () => assertFails(cashier.doc('shops
 await check('cashier takes the next phone letter', () => assertSucceeds(cashier.doc('shops/shopA/counters/devices').set({ next: 1 })));
 await check('other shop cannot touch the counter', () => assertFails(ownerB.doc('shops/shopA/counters/devices').set({ next: 9 })));
 
+console.log('Udhaar / khata');
+await check('cashier records udhaar', () => assertSucceeds(cashier.doc('shops/shopA/khata/9876543210').set({ name: 'Sunil', phone: '9876543210', balance: 100, updatedAt: 1 })));
+await check('cashier adds an entry', () => assertSucceeds(cashier.doc('shops/shopA/khata/9876543210/entries/e1').set({ type: 'udhaar', amount: 100, at: 1, by: 'c' })));
+await check('cashier cannot change a past entry', () => assertFails(cashier.doc('shops/shopA/khata/9876543210/entries/e1').update({ amount: 1 })));
+await check('cashier cannot delete an account', () => assertFails(cashier.doc('shops/shopA/khata/9876543210').delete()));
+await check('other shop cannot read the khata', () => assertFails(ownerB.collection('shops/shopA/khata').get()));
+await check('owner deletes a wrong entry', () => assertSucceeds(ownerA.doc('shops/shopA/khata/9876543210/entries/e1').delete()));
+
 console.log('Owner of shop A');
 await check('owner approves the bill', () => assertSucceeds(ownerA.doc('shops/shopA/reviews/r1').update({ status: 'approved', updatedCart: [], approvedAt: 2 })));
 await check('owner edits the shop profile', () => assertSucceeds(ownerA.doc('shops/shopA').update({ name: 'Shop A renamed' })));
@@ -118,6 +126,16 @@ await check('owner cancels an invite', async () => {
   await ownerA.doc('invites/later@test.com').set({ ...inviteA, email: 'later@test.com' });
   return assertSucceeds(ownerA.doc('invites/later@test.com').delete());
 });
+
+console.log('Deleting a shop');
+await createShopBatch(as('ownerC'), 'ownerC', 'shopC', '777777');
+const ownerC = as('ownerC');
+await check('owner record stays while the shop exists', () => assertFails(ownerC.doc('shops/shopC/members/ownerC').delete()));
+await check('owner deletes the join code', () => assertSucceeds(ownerC.doc('joinCodes/777777').delete()));
+await check('owner deletes the shop', () => assertSucceeds(ownerC.doc('shops/shopC').delete()));
+await check('then their own owner record', () => assertSucceeds(ownerC.doc('shops/shopC/members/ownerC').delete()));
+await check('and their user link', () => assertSucceeds(ownerC.doc('users/ownerC').delete()));
+await check('owner of another shop still cannot delete shop A', () => assertFails(ownerB.doc('shops/shopA').delete()));
 
 console.log('Old single-shop inventory');
 await check('signed-in user can read the old inventory (for the import)', () => assertSucceeds(ownerA.collection('inventory').get()));

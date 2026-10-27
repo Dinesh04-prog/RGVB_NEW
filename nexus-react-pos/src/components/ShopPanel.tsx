@@ -2,13 +2,14 @@ import { useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import {
   changeJoinCode, removeMember, subscribeToMembers, legacyInventoryCount, importLegacyInventory,
-  inviteCashier, cancelInvite, subscribeToInvites, writeOrQueue,
+  inviteCashier, cancelInvite, subscribeToInvites, writeOrQueue, deleteShopAndAccount, signedInRecently,
   type ShopMember, type ShopInvite,
 } from '../lib/firebase';
 import { openExternalUrl } from '../lib/androidApp';
 import { APP_NAME } from '../lib/appInfo';
 import { brandOf } from '../lib/shopBrand';
 import ShopDetailsForm from './ShopDetailsForm';
+import localforage from 'localforage';
 
 // Owner → ☰ → Shop: add cashiers by Gmail (or a join code), who is in the shop, and the one-time import of the old
 // shared inventory.
@@ -33,13 +34,16 @@ const CSS = `
 `;
 
 export default function ShopPanel({ shopItemCount }: { shopItemCount: number }) {
-  const { user, shop } = useAuth();
+  const { user, shop, logout } = useAuth();
   const [members, setMembers] = useState<ShopMember[]>([]);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [legacyCount, setLegacyCount] = useState(0);
   const [importStatus, setImportStatus] = useState('');
   const [editing, setEditing] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteName, setDeleteName] = useState('');
+  const [deleteStatus, setDeleteStatus] = useState('');
   const [invites, setInvites] = useState<ShopInvite[]>([]);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteError, setInviteError] = useState('');
@@ -84,6 +88,23 @@ export default function ShopPanel({ shopItemCount }: { shopItemCount: number }) 
     try { await writeOrQueue(inviteCashier(shop, user.uid, email)); setInviteEmail(''); }
     catch (err) { console.error(err); setInviteError(err instanceof Error ? err.message : 'Could not add. Check the internet connection.'); }
     finally { setBusy(false); }
+  };
+
+  // Deletes everything of this shop and the owner's account (Play Store: users can delete their data in the app)
+  const deleteEverything = async () => {
+    if (!signedInRecently()) { setDeleteStatus('relogin'); return; }
+    setBusy(true); setDeleteStatus('⏳ Deleting…');
+    try {
+      await deleteShopAndAccount(shop, step => setDeleteStatus(`⏳ Deleting ${step}`));
+      await localforage.clear();
+      setDeleteStatus('✅ Shop and account deleted.');
+      logout();
+    } catch (err) {
+      console.error(err);
+      setDeleteStatus((err as { code?: string }).code === 'auth/requires-recent-login' ? 'relogin'
+        : '⚠️ Could not finish. Check the internet and tap Delete again (it continues where it stopped).');
+      setBusy(false);
+    }
   };
 
   const runImport = async () => {
@@ -186,6 +207,36 @@ export default function ShopPanel({ shopItemCount }: { shopItemCount: number }) 
           {importStatus && <div className="sp-status">{importStatus}</div>}
         </div>
       )}
+
+      <div className="sp-card" style={{ border: '1.5px solid #FCA5A5' }}>
+        <div className="sp-title" style={{ color: '#B91C1C' }}>⚠️ Delete shop</div>
+        {!deleteOpen ? (
+          <>
+            <div className="sp-note">Deletes this shop, all its items, bills, udhaar and cashiers, and your account. This cannot be undone.</div>
+            <button className="sp-remove" style={{ marginTop: 10 }} onClick={() => setDeleteOpen(true)}>Delete shop and my account…</button>
+          </>
+        ) : (
+          <>
+            <div className="sp-note">
+              Tip: first download a backup (Inventory → Export, Reports → Download backup). To confirm, type the shop name:
+              <b> {shop.name}</b>
+            </div>
+            <input className="sp-input" style={{ width: '100%', marginTop: 8 }} value={deleteName} onChange={e => setDeleteName(e.target.value)} />
+            {deleteStatus === 'relogin' ? (
+              <div className="sp-error">
+                For safety, Google asks for a fresh sign-in first. Sign out, sign in again, and come back here within 4 minutes.
+                <button className="sp-btn outline" style={{ width: '100%', marginTop: 8 }} onClick={logout}>Sign out</button>
+              </div>
+            ) : deleteStatus && <div className="sp-status">{deleteStatus}</div>}
+            <div className="sp-row" style={{ marginTop: 10 }}>
+              <button className="sp-btn outline" disabled={busy} onClick={() => { setDeleteOpen(false); setDeleteName(''); setDeleteStatus(''); }}>Cancel</button>
+              <button className="sp-btn" style={{ background: '#DC2626' }} disabled={busy || deleteName.trim() !== shop.name.trim()} onClick={deleteEverything}>
+                🗑 Delete everything
+              </button>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }

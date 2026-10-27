@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { useAuth } from "./contexts/AuthContext";
 import {
-  createReview, subscribeToReview, isFirebaseReady,
+  createReview, subscribeToReview, isFirebaseReady, addKhataEntry, writeOrQueue, reduceStockInCloud,
+  leaveShopAndDeleteAccount, signedInRecently,
   saveInventoryItemToCloud, removeInventoryItemFromCloud,
   subscribeToInventory, bulkSaveInventoryToFirestore,
 } from "./lib/firebase";
@@ -16,6 +17,8 @@ import { translateHinglishToMarathi, transliterateDevanagariToLatin, normalizeFo
 import { itemNameFields, makeSearchKey, withItemNames } from "./lib/itemNames";
 import { getUnitMultiplier, STANDARD_UNITS } from "./lib/units";
 import { brandOf, isPrinterText } from "./lib/shopBrand";
+import { upiPayLink, qrCanvas, qrDataUrl } from "./lib/upiQr";
+import KhataPanel from "./components/KhataPanel";
 import { APP_NAME } from "./lib/appInfo";
 import { usePhotoScanFill } from "./lib/usePhotoScanFill";
 import { InventoryTile, ItemThumb, INVENTORY_TILE_CSS } from "./components/InventoryTile";
@@ -107,6 +110,26 @@ export default function App() {
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
   const [lastReceipt, setLastReceipt] = useState<Receipt | null>(null);
+  // UPI QR for the bill just made (shop's UPI ID in its settings): any UPI app scans it with the amount filled in
+  const upiLinkFor = (r: Receipt) => (brand.upiId ? upiPayLink(brand.upiId, brand.name, r.total, `Bill ${r.receipt_no}`) : '');
+  // "Put on udhaar" on the Bill saved screen: form shown when the bill has no customer; done = bill number recorded
+  const [udhaarForm, setUdhaarForm] = useState<{ name: string; phone: string } | null>(null);
+  const [udhaarDone, setUdhaarDone] = useState<{ bill: string; who: string } | null>(null);
+  const [udhaarBusy, setUdhaarBusy] = useState(false);
+  const putOnUdhaar = async (r: Receipt, name: string, phone: string) => {
+    if (!name.trim() && phone.replace(/\D/g, '').length !== 10) { setUdhaarForm({ name, phone }); return; }
+    setUdhaarBusy(true);
+    try {
+      await writeOrQueue(addKhataEntry({ name, phone }, { type: 'udhaar', amount: r.total, billNo: r.receipt_no }));
+      setUdhaarDone({ bill: r.receipt_no, who: name.trim() || phone.trim() }); setUdhaarForm(null);
+    } catch (err) { console.error(err); alert('Could not add to udhaar. Try again.'); }
+    finally { setUdhaarBusy(false); }
+  };
+  const lastReceiptQr = useMemo(
+    () => (lastReceipt && brand.upiId ? qrDataUrl(upiLinkFor(lastReceipt), 240) : ''),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [lastReceipt, brand.upiId, brand.name],
+  );
   const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
   const [receiptShareOpen, setReceiptShareOpen] = useState(false);
   const [viewingReceipt, setViewingReceipt] = useState<Receipt | null>(null);
@@ -1024,11 +1047,20 @@ export default function App() {
     return `${brand.billPrefix}-${day}${month}-${letter}${count.toString().padStart(3, '0')}`;
   };
 
+  // Stock of the items sold goes down (only items whose stock is being kept, i.e. above 0)
+  const reduceStockFor = (lines: CartItem[]) => {
+    if (!isFirebaseReady) return;
+    reduceStockInCloud(lines
+      .filter(l => (inventory.find(i => i.id === l.id)?.stock_quantity ?? 0) > 0)
+      .map(l => ({ id: l.id, qty: l.qty * (l.multiplier ?? 1) })));
+  };
+
   const checkout = async () => {
     if (cart.length === 0) return;
     try {
       const billNo = await getNextBillNumber();
       const receipt = await saveSale(cart, cartTotal, customerName, customerPhone, billNo);
+      reduceStockFor(cart);
       setLastReceipt(receipt);
       setIsShortBillMode(false);
       setCart([]);
@@ -1047,6 +1079,7 @@ export default function App() {
     try {
       const billNo = await getNextBillNumber();
       const receipt = await saveSale(sbCart, total, customerName, customerPhone, billNo, true);
+      reduceStockFor(sbCart);
       setLastReceipt(receipt);
       setSbCart([]);
       setCustomerName("");
@@ -1099,6 +1132,7 @@ export default function App() {
     });
     text += `─────────────────\n`;
     text += `*TOTAL: ₹${r.total.toFixed(2)}*\n`;
+    if (brand.upiId) text += `Pay by UPI: ${brand.upiId}\n`;
     text += brand.footer;
     return text;
   };
@@ -1428,7 +1462,7 @@ export default function App() {
   };
 
   const buildEscPos = (r: Receipt, hideRate = false, rasterProvider?: (item: any, index: number) => Uint8Array | null, logoRaster?: Uint8Array,
-    textRaster?: (text: string, px: number, bold: boolean) => Uint8Array): Uint8Array => {
+    textRaster?: (text: string, px: number, bold: boolean) => Uint8Array, qrRaster?: Uint8Array): Uint8Array => {
     const W = 48;
     const C1 = hideRate ? 29 : 19;
     const C2 = hideRate ? 10 : 10;
@@ -1542,6 +1576,13 @@ export default function App() {
     b(0x1B, 0x45, 0x00);  // bold off
     str('='.repeat(W)); nl();
 
+    // ── UPI QR (shop has a UPI ID) ─────────────────────────────
+    if (qrRaster) {
+      b(0x1B, 0x61, 0x01);
+      str(`Scan to pay Rs.${r.total.toFixed(2)}`); nl();
+      buf.push(...qrRaster); nl();
+    }
+
     // ── Footer ───────────────────────────────────────────────
     b(0x1B, 0x61, 0x01);  // align centre
     if (!isPrinterText(brand.footer) && textRaster) buf.push(...textRaster(brand.footer, 22, false));
@@ -1614,6 +1655,7 @@ export default function App() {
       (window as any).AndroidBT.printBillNative(JSON.stringify({
         ...receipt,
         shop: { name: brand.name, tagline: brand.tagline, address: brand.address, phone: brand.phone, footer: brand.footer, logo: brand.logo },
+        upiQr: brand.upiId ? qrDataUrl(upiLinkFor(receipt), 260) : '',
       }));
       return;
     }
@@ -1663,6 +1705,18 @@ export default function App() {
       ctx.fillText(text, PW / 2, c.height / 2, PW - 8);
       return canvasToEscPosRaster(c);
     };
+
+    // UPI QR centred on the 576-dot paper
+    let qrRaster: Uint8Array | undefined;
+    if (brand.upiId) {
+      const qr = qrCanvas(upiLinkFor(receipt), 260);
+      const paper = document.createElement('canvas');
+      paper.width = 576; paper.height = qr.height;
+      const pctx = paper.getContext('2d')!;
+      pctx.fillStyle = '#fff'; pctx.fillRect(0, 0, paper.width, paper.height);
+      pctx.drawImage(qr, Math.round((576 - qr.width) / 2), 0);
+      qrRaster = canvasToEscPosRaster(paper);
+    }
 
     // Auto-detect Devanagari text for raster printing, or allow explicit markers.
     const containsDevanagari = (s?: string) => {
@@ -1771,7 +1825,7 @@ export default function App() {
       || isBitmapMarker(receipt.customerName || '');
 
     if (!markerExists) {
-      try { await btSend(buildEscPos(receipt, isShortBillMode, undefined, logoRaster, textRaster)); }
+      try { await btSend(buildEscPos(receipt, isShortBillMode, undefined, logoRaster, textRaster, qrRaster)); }
       catch (err: any) { alert(`Print failed: ${err.message}`); }
       return;
     }
@@ -1793,7 +1847,7 @@ export default function App() {
     };
 
     try {
-      await btSend(buildEscPos(receipt, isShortBillMode, rasterProvider, logoRaster, textRaster));
+      await btSend(buildEscPos(receipt, isShortBillMode, rasterProvider, logoRaster, textRaster, qrRaster));
     } catch (err: any) {
       alert(`Print failed: ${err.message}`);
     }
@@ -2089,6 +2143,8 @@ export default function App() {
             .rp-total-row { display: flex; justify-content: space-between; font-size: 11pt; font-weight: bold; padding: 1.5mm 0; letter-spacing: 0.5px; }
             .rp-items-count { font-size: 7.5pt; text-align: right; color: #333; }
             .rp-footer { font-size: 7.5pt; text-align: center; margin-top: 3mm; }
+            .rp-qr { text-align: center; margin-top: 2mm; font-size: 7.5pt; font-weight: bold; }
+            .rp-qr img { width: 30mm; height: 30mm; image-rendering: pixelated; }
             @page { size: 80mm auto; margin: 0; }
         }
         @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
@@ -2110,10 +2166,10 @@ export default function App() {
           <button onClick={() => setSidebarOpen(false)} style={{ background: 'transparent', border: 'none', color: 'white', fontSize: '1.3rem', cursor: 'pointer', lineHeight: 1, padding: 4 }}>✕</button>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
-          {(['billing','shortbilling','inventory','reports','customers','receipts','printer'] as const).map(tab => {
+          {(['billing','shortbilling','inventory','reports','customers', ...(isFirebaseReady ? ['khata'] as const : []),'receipts','printer'] as const).map(tab => {
             const labels: Record<string, string> = {
               billing: '📝 BILLING', shortbilling: '📋 SHORT BILL', inventory: '📦 INVENTORY', reports: '📊 REPORTS',
-              customers: '👥 CUSTOMERS', receipts: '🧾 RECEIPTS', printer: '🖨️ PRINTER SETUP',
+              customers: '👥 CUSTOMERS', khata: '📒 UDHAAR (KHATA)', receipts: '🧾 RECEIPTS', printer: '🖨️ PRINTER SETUP',
             };
             return (
               <a key={tab} className={`nav-link ${activeTab === tab ? 'active' : ''}`}
@@ -2153,6 +2209,18 @@ export default function App() {
             >
               Sign Out
             </button>
+            {isFirebaseReady && (
+              <button
+                onClick={async () => {
+                  if (!confirm(`Leave ${brand.name} and delete your account?\n\nBills you made stay with the shop. This cannot be undone.`)) return;
+                  if (!signedInRecently()) { alert('For safety, Google asks for a fresh sign-in first.\nSign out, sign in again, then tap "Delete my account" within 4 minutes.'); return; }
+                  try { await leaveShopAndDeleteAccount(); await localforage.clear(); logout(); }
+                  catch (err) { console.error(err); alert('Could not delete the account. Check the internet and try again.'); }
+                }}
+                style={{ width: '100%', marginTop: 6, background: 'transparent', color: 'rgba(255,255,255,0.6)', border: 'none', fontSize: '0.72rem', cursor: 'pointer', textDecoration: 'underline', minHeight: 32 }}>
+                Delete my account
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -2617,6 +2685,13 @@ export default function App() {
                 पुढे →
               </button>
             </div>
+          </div>
+        )}
+
+        {activeTab === 'khata' && (
+          <div>
+            <h2 style={{ fontWeight: 'bold', marginBottom: '1rem' }}>📒 Udhaar (Khata)</h2>
+            <KhataPanel />
           </div>
         )}
 
@@ -3802,6 +3877,13 @@ export default function App() {
                 <span>TOTAL</span>
                 <span>Rs.{lastReceipt.total.toFixed(2)}</span>
               </div>
+              {lastReceiptQr && (
+                <div style={{ textAlign: 'center', marginTop: '8px' }}>
+                  <img src={lastReceiptQr} alt="UPI QR" style={{ width: 132, height: 132, imageRendering: 'pixelated' }} />
+                  <div style={{ fontSize: '10px', fontWeight: 'bold' }}>Scan to pay Rs.{lastReceipt.total.toFixed(2)}</div>
+                  <div style={{ fontSize: '9px', color: '#555' }}>UPI: {brand.upiId}</div>
+                </div>
+              )}
               <div style={{ textAlign: 'center', marginTop: '8px', fontSize: '8px', color: '#888' }}>*** {brand.footer} ***</div>
             </div>
 
@@ -3832,6 +3914,34 @@ export default function App() {
               >
                 📲 Share on WhatsApp
               </button>
+              {isFirebaseReady && (udhaarDone?.bill === lastReceipt.receipt_no ? (
+                <div style={{ textAlign: 'center', fontWeight: 700, color: '#DC2626', padding: '6px 0' }}>
+                  📒 ₹{lastReceipt.total.toFixed(2)} added to {udhaarDone.who}'s udhaar
+                </div>
+              ) : udhaarForm ? (
+                <div style={{ border: '1.5px solid #DC2626', borderRadius: 10, padding: 10 }}>
+                  <div style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: 6 }}>Udhaar for which customer?</div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <input placeholder="Name" value={udhaarForm.name} autoFocus
+                      onChange={e => setUdhaarForm({ ...udhaarForm, name: e.target.value })}
+                      style={{ flex: 1, minWidth: 0, height: 44, borderRadius: 8, border: '1.5px solid #cbd5e1', padding: '0 10px', fontSize: '0.95rem' }} />
+                    <input placeholder="Mobile" inputMode="tel" value={udhaarForm.phone}
+                      onChange={e => setUdhaarForm({ ...udhaarForm, phone: e.target.value })}
+                      style={{ flex: 1, minWidth: 0, height: 44, borderRadius: 8, border: '1.5px solid #cbd5e1', padding: '0 10px', fontSize: '0.95rem' }} />
+                  </div>
+                  <button disabled={udhaarBusy || (!udhaarForm.name.trim() && udhaarForm.phone.replace(/\D/g, '').length !== 10)}
+                    onClick={() => putOnUdhaar(lastReceipt, udhaarForm.name, udhaarForm.phone)}
+                    style={{ width: '100%', marginTop: 8, minHeight: 44, background: '#DC2626', color: 'white', border: 'none', borderRadius: 8, fontWeight: 'bold', cursor: 'pointer' }}>
+                    📒 Add ₹{lastReceipt.total.toFixed(2)} to udhaar
+                  </button>
+                </div>
+              ) : (
+                <button disabled={udhaarBusy}
+                  onClick={() => putOnUdhaar(lastReceipt, lastReceipt.customerName || '', lastReceipt.customerPhone || '')}
+                  style={{ width: '100%', padding: '12px', background: 'white', color: '#DC2626', border: '2px solid #DC2626', borderRadius: '10px', fontWeight: 'bold', fontSize: '0.95rem', cursor: 'pointer' }}>
+                  📒 Customer will pay later (udhaar)
+                </button>
+              ))}
               <div style={{ display: 'flex', gap: '8px' }}>
                 <button
                   onClick={downloadReceiptImage}
@@ -3911,6 +4021,13 @@ export default function App() {
               <span>Rs.{lastReceipt.total.toFixed(2)}</span>
             </div>
             <hr className="rp-divider" />
+
+            {lastReceiptQr && (
+              <div className="rp-qr">
+                <img src={lastReceiptQr} alt="" />
+                <div>Scan to pay Rs.{lastReceipt.total.toFixed(2)} · UPI: {brand.upiId}</div>
+              </div>
+            )}
 
             <div className="rp-footer">
               *** {brand.footer} ***

@@ -67,7 +67,7 @@ object EscPosPrinter {
 
         // ── Company logo ──────────────────────────────────────────────────────
         w(ALIGN_CTR)
-        renderLogo(shop?.optString("logo", "").orEmpty())?.let { w(it) }
+        renderImage(shop?.optString("logo", "").orEmpty(), 90)?.let { w(it) }
 
         // ── Shop header ───────────────────────────────────────────────────────
         // Plain English in the printer's font; anything else (Marathi…) drawn as an image
@@ -122,6 +122,11 @@ object EscPosPrinter {
         w(NORMAL_SIZE); w(BOLD_OFF)
         divider()
 
+        // ── UPI QR (the shop's UPI ID with this bill's amount, drawn by the web app) ──
+        renderImage(json.optString("upiQr", ""), 0, smooth = false)?.let {
+            w(ALIGN_CTR); line("Scan to pay Rs.${fmtN(total)}"); w(it)
+        }
+
         // ── Footer ────────────────────────────────────────────────────────────
         w(ALIGN_CTR)
         val footerText = footer.replace("—", "-")
@@ -133,16 +138,19 @@ object EscPosPrinter {
 
     // ── Bitmap row renderers ──────────────────────────────────────────────────
 
-    /** The shop's logo (a "data:image/jpeg;base64,…" URL from the shop settings), 90 px wide, centred. None → null. */
-    private fun renderLogo(dataUrl: String): ByteArray? {
+    /**
+     * A picture sent by the web app as a data URL ("data:image/…;base64,…"), `widthPx` wide (0 = as it is), centred:
+     * the shop's logo, or the UPI QR (`smooth = false` keeps the QR squares sharp so phones can scan it). None → null.
+     */
+    private fun renderImage(dataUrl: String, widthPx: Int, smooth: Boolean = true): ByteArray? {
         if (dataUrl.isBlank()) return null
         return try {
             val bytes = Base64.decode(dataUrl.substringAfter(','), Base64.DEFAULT)
             val raw = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
 
-            val logoW = 90
+            val logoW = if (widthPx > 0) widthPx else raw.width.coerceAtMost(PAPER_W)
             val logoH = (raw.height.toFloat() * logoW / raw.width).toInt()
-            val scaled = Bitmap.createScaledBitmap(raw, logoW, logoH, true)
+            val scaled = Bitmap.createScaledBitmap(raw, logoW, logoH, smooth)
             raw.recycle()
 
             val bm     = Bitmap.createBitmap(PAPER_W, logoH + 8, Bitmap.Config.ARGB_8888)

@@ -1,13 +1,13 @@
 import { initializeApp, getApps } from 'firebase/app';
 import {
   initializeAuth, getAuth, indexedDBLocalPersistence, browserLocalPersistence, connectAuthEmulator,
-  GoogleAuthProvider, signInWithCredential, signOut, onAuthStateChanged, type User,
+  GoogleAuthProvider, signInWithCredential, signOut, onAuthStateChanged, deleteUser, type User,
 } from 'firebase/auth';
 import {
   initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager, connectFirestoreEmulator, CACHE_SIZE_UNLIMITED,
   doc, getDoc, getDocs, getDocsFromCache, setDoc, updateDoc, deleteDoc, writeBatch, runTransaction,
-  onSnapshot, collection, query, where, orderBy, limit, getCountFromServer, serverTimestamp, Timestamp,
-  type QueryDocumentSnapshot,
+  onSnapshot, collection, query, where, orderBy, limit, getCountFromServer, serverTimestamp, Timestamp, increment,
+  type QueryDocumentSnapshot, type WriteBatch,
 } from 'firebase/firestore';
 import type { CartItem, Receipt } from './db';
 
@@ -166,7 +166,7 @@ let activeShopId: string | null = null;
 export const setActiveShop = (shopId: string | null) => { activeShopId = shopId; };
 export const getActiveShopId = () => activeShopId;
 
-type ShopCollection = 'inventory' | 'reviews' | 'members' | 'sales' | 'counters';
+type ShopCollection = 'inventory' | 'reviews' | 'members' | 'sales' | 'counters' | 'khata';
 const shopCol = (name: ShopCollection) => {
   if (!db || !activeShopId) throw new Error('No shop selected');
   return collection(db, 'shops', activeShopId, name);
@@ -543,4 +543,122 @@ export const claimDeviceLetter = async (): Promise<string | null> => {
       return LETTERS[next % LETTERS.length];
     })]);
   } catch { return null; }
+};
+
+// ── Udhaar / khata (credit book) ─────────────────────────────────────────────
+//
+// shops/{id}/khata/{key} = one customer's account (name, phone, balance); /entries = each udhaar or payment.
+// The balance changes with increment(), so entries made offline on two phones add up correctly.
+
+export interface KhataAccount { id: string; name: string; phone: string; balance: number; updatedAt: number }
+export interface KhataEntry {
+  id: string; type: 'udhaar' | 'payment'; amount: number; billNo?: string; note?: string; at: number; by: string;
+}
+
+/** Account key: the 10-digit mobile number, or the name when there is no number. */
+export const khataKey = (name: string, phone: string) => {
+  const digits = phone.replace(/\D/g, '').slice(-10);
+  if (digits.length === 10) return digits;
+  return `n-${name.trim().toLowerCase().replace(/[^a-z0-9\p{Script=Devanagari}]+/gu, '-').replace(/^-|-$/g, '').slice(0, 40) || 'customer'}`;
+};
+
+/** Records udhaar (adds to what the customer owes) or a payment (subtracts). */
+export const addKhataEntry = (
+  customer: { name: string; phone: string },
+  entry: { type: 'udhaar' | 'payment'; amount: number; billNo?: string; note?: string },
+) => {
+  if (!ready()) throw new Error('No shop selected');
+  const name = customer.name.trim() || customer.phone.trim();
+  const phone = customer.phone.replace(/\D/g, '').slice(-10);
+  const account = shopDoc('khata', khataKey(name, phone));
+  const by = auth?.currentUser?.displayName || auth?.currentUser?.email || '';
+  const batch = writeBatch(db!);
+  const record: Omit<KhataEntry, 'id'> = { type: entry.type, amount: entry.amount, at: Date.now(), by };
+  if (entry.billNo) record.billNo = entry.billNo;
+  if (entry.note?.trim()) record.note = entry.note.trim();
+  batch.set(doc(collection(account, 'entries')), record);
+  batch.set(account, {
+    name, phone, balance: increment(entry.type === 'udhaar' ? entry.amount : -entry.amount), updatedAt: Date.now(),
+  }, { merge: true });
+  return batch.commit();
+};
+
+export const subscribeToKhata = (cb: (accounts: KhataAccount[]) => void) => {
+  if (!ready()) return () => {};
+  return onSnapshot(shopCol('khata'), snap =>
+    cb(snap.docs.map(d => ({ ...(d.data() as Omit<KhataAccount, 'id'>), id: d.id }))
+      .sort((a, b) => b.balance - a.balance || b.updatedAt - a.updatedAt)),
+  err => console.error('Khata failed:', err));
+};
+
+/** The latest 100 entries of one customer, newest first. */
+export const subscribeToKhataEntries = (key: string, cb: (entries: KhataEntry[]) => void) => {
+  if (!ready()) return () => {};
+  const q = query(collection(shopDoc('khata', key), 'entries'), orderBy('at', 'desc'), limit(100));
+  return onSnapshot(q, snap => cb(snap.docs.map(d => ({ ...(d.data() as Omit<KhataEntry, 'id'>), id: d.id }))));
+};
+
+// ── Stock goes down when items are sold ──────────────────────────────────────
+
+/** Subtracts sold quantities (in the item's own unit). increment() keeps sales on several phones correct offline. */
+export const reduceStockInCloud = (lines: { id: string; qty: number }[]) => {
+  if (!ready()) return;
+  for (const { id, qty } of lines) {
+    if (!(qty > 0)) continue;
+    updateDoc(shopDoc('inventory', id), {
+      stock_quantity: increment(-qty), stock_qty: increment(-qty), _updatedAt: serverTimestamp(),
+    }).catch(err => console.error('Stock update failed:', id, err));
+  }
+};
+
+// ── Delete account / shop data (Play Store requirement) ──────────────────────
+
+/** Google asks for a fresh sign-in before an account can be deleted: true when signed in within the last 4 minutes. */
+export const signedInRecently = () => {
+  const t = auth?.currentUser?.metadata.lastSignInTime;
+  return !!t && Date.now() - Date.parse(t) < 4 * 60 * 1000;
+};
+
+const deleteDocsIn = async (docs: { ref: Parameters<WriteBatch['delete']>[0] }[]) => {
+  for (let i = 0; i < docs.length; i += 400) {
+    const batch = writeBatch(db!);
+    docs.slice(i, i + 400).forEach(d => batch.delete(d.ref));
+    await batch.commit();
+  }
+};
+
+/**
+ * Owner: deletes the shop and everything in it, then their own sign-in account. The owner's member record goes last,
+ * because the security rules check it for every other delete.
+ */
+export const deleteShopAndAccount = async (shop: Shop, onProgress?: (step: string) => void) => {
+  const me = auth?.currentUser;
+  if (!db || !me) throw new Error('Not signed in');
+  const base = doc(db, 'shops', shop.id);
+  onProgress?.('Udhaar…');
+  for (const account of (await getDocs(collection(base, 'khata'))).docs) {
+    await deleteDocsIn((await getDocs(collection(account.ref, 'entries'))).docs);
+  }
+  for (const name of ['khata', 'inventory', 'sales', 'reviews', 'counters'] as const) {
+    onProgress?.(name === 'inventory' ? 'Items…' : name === 'sales' ? 'Bills…' : 'Records…');
+    await deleteDocsIn((await getDocs(collection(base, name))).docs);
+  }
+  onProgress?.('Cashiers and codes…');
+  await deleteDocsIn((await getDocs(query(collection(db, 'invites'), where('shopId', '==', shop.id)))).docs);
+  await deleteDocsIn((await getDocs(collection(base, 'members'))).docs.filter(d => d.id !== me.uid));
+  await deleteDoc(doc(db, 'joinCodes', shop.joinCode)).catch(() => {});
+  onProgress?.('Shop…');
+  await deleteDoc(base);
+  await deleteDoc(doc(base, 'members', me.uid));
+  await deleteDoc(doc(db, 'users', me.uid));
+  onProgress?.('Account…');
+  await deleteUser(me);
+};
+
+/** Cashier: leaves the shop and deletes their sign-in account (bills they made stay with the shop). */
+export const leaveShopAndDeleteAccount = async () => {
+  const me = auth?.currentUser;
+  if (!db || !me) throw new Error('Not signed in');
+  await leaveShop(me.uid);
+  await deleteUser(me);
 };

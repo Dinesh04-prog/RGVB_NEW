@@ -23,6 +23,8 @@ import {
 import { itemNameFields, makeSearchKey, withItemNames } from '../lib/itemNames';
 import { getUnitMultiplier, STANDARD_UNITS } from '../lib/units';
 import ShopPanel from './ShopPanel';
+import KhataPanel from './KhataPanel';
+import { openExternalUrl } from '../lib/androidApp';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 const fmt = (n: number) => `₹${n.toFixed(2)}`;
@@ -43,6 +45,7 @@ const cartTotal = (cart: CartItem[] | undefined) => (cart || []).reduce((sum, i)
 const finalCart = (s: ReviewSession) => (s.status === 'approved' && s.updatedCart ? s.updatedCart : s.cart);
 
 const ITEMS_PER_PAGE = 10;
+const LOW_STOCK = 10;
 const RECENT_PAGE_SIZE = 50;
 const BARCODE_FORMATS = [
   Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.EAN_8, Html5QrcodeSupportedFormats.UPC_A,
@@ -295,7 +298,9 @@ function BarcodeScanner({ onResult, onClose }: { onResult: (code: string) => voi
 export default function OwnerApp({ initialReviewId, reviewOnly = false }: { initialReviewId: string | null; reviewOnly?: boolean }) {
   const { user, shop, logout } = useAuth();
   const shopName = shop?.name || '';
-  const [activeTab, setActiveTab] = useState<'bills' | 'inventory' | 'shop'>('bills');
+  type Tab = 'bills' | 'inventory' | 'khata' | 'shop';
+  const [activeTab, setActiveTab] = useState<Tab>('bills');
+  const [lowOnly, setLowOnly] = useState(false);
   // ☰ sidebar: on desktop it is shown or collapsed (remembered); on phones it is a drawer, closed by default
   const [sideCollapsed, setSideCollapsed] = useState(() => {
     try { return localStorage.getItem('owner_sidebar_collapsed') === '1'; } catch { return false; }
@@ -503,7 +508,35 @@ export default function OwnerApp({ initialReviewId, reviewOnly = false }: { init
     } catch (err) { console.error(err); alert('Error exporting Excel.'); }
   };
 
-  const filteredStock = useMemo(() => searchInventory(inventory, fuse, stockQuery), [inventory, fuse, stockQuery]);
+  // Low stock: items whose stock is kept and is under 10 (0 means the shop does not count that item; below 0 = oversold)
+  const isLow = (i: InventoryItem) => { const q = i.stock_quantity ?? 0; return q !== 0 && q < LOW_STOCK; };
+  const lowStock = useMemo(() => inventory.filter(isLow), [inventory]);
+  const filteredStock = useMemo(() => {
+    const found = searchInventory(inventory, fuse, stockQuery);
+    return lowOnly ? found.filter(isLow) : found;
+  }, [inventory, fuse, stockQuery, lowOnly]);
+  const shareToBuyList = () => {
+    const lines = lowStock.map(i => `• ${formatName(i.name_marathi || i.name_eng || i.name)} (${i.unit || 'unit'}) — left: ${i.stock_quantity ?? 0}`);
+    const text = `🛒 *To buy — ${shopName}*\n${new Date().toLocaleDateString('en-IN')}\n\n${lines.join('\n')}`;
+    openExternalUrl(`https://wa.me/?text=${encodeURIComponent(text)}`);
+  };
+
+  // A new shop can start from the common kirana list that ships with the app (public/inventory.json)
+  const loadStarterList = async () => {
+    if (!confirm('Load the starter list of common kirana items (about 10,000)? You can edit or delete items later.')) return;
+    showStatus('⏳ Loading the starter list…');
+    try {
+      const r = await fetch('/inventory.json');
+      const items = await r.json() as InventoryItem[];
+      setInventory(items);
+      await localforage.setItem('custom_inventory', items);
+      await bulkSaveInventoryToFirestore(items, (done, total) => showStatus(`⏳ Saving ${done} / ${total} items for all phones…`));
+      showStatus(`✅ ${items.length} items ready.`, 6000);
+    } catch (err) {
+      console.error(err);
+      showStatus('⚠️ Could not load the starter list. Check the internet and try again.', 8000);
+    }
+  };
   const favFilteredStock = filteredStock.filter(s => favoriteIds.has(s.id));
   const nonFavFilteredStock = filteredStock.filter(s => !favoriteIds.has(s.id));
   const totalStockPages = Math.max(1, Math.ceil(nonFavFilteredStock.length / ITEMS_PER_PAGE));
@@ -552,8 +585,8 @@ export default function OwnerApp({ initialReviewId, reviewOnly = false }: { init
     try { localStorage.setItem('owner_sidebar_collapsed', next ? '1' : '0'); } catch { /* storage blocked */ }
   };
   const closeSidebar = () => { if (isPhone()) setDrawerOpen(false); else if (!sideCollapsed) toggleSidebar(); };
-  const goTab = (t: 'bills' | 'inventory' | 'shop') => { setActiveTab(t); setDrawerOpen(false); };
-  const tabTitle = activeTab === 'bills' ? '📋 Bills' : activeTab === 'inventory' ? '📦 Inventory' : '🏪 Shop';
+  const goTab = (t: Tab) => { setActiveTab(t); setDrawerOpen(false); };
+  const tabTitle = { bills: '📋 Bills', inventory: '📦 Inventory', khata: '📒 Udhaar (Khata)', shop: '🏪 Shop' }[activeTab];
 
   return (
     <div className={sideCollapsed ? 'o-side-collapsed' : undefined} style={{ minHeight: '100vh', background: '#f1f2f6' }}>
@@ -574,6 +607,7 @@ export default function OwnerApp({ initialReviewId, reviewOnly = false }: { init
         <div style={{ flex: 1 }}>
           <a className={`nav-link ${activeTab === 'bills' ? 'active' : ''}`} onClick={() => goTab('bills')}>📋 BILLS {badge}</a>
           <a className={`nav-link ${activeTab === 'inventory' ? 'active' : ''}`} onClick={() => goTab('inventory')}>📦 INVENTORY</a>
+          <a className={`nav-link ${activeTab === 'khata' ? 'active' : ''}`} onClick={() => goTab('khata')}>📒 UDHAAR (KHATA)</a>
           <a className={`nav-link ${activeTab === 'shop' ? 'active' : ''}`} onClick={() => goTab('shop')}>🏪 SHOP & CASHIERS</a>
         </div>
         {user && (
@@ -613,6 +647,9 @@ export default function OwnerApp({ initialReviewId, reviewOnly = false }: { init
         {/* ── Shop tab: join code, cashiers, old-inventory import ─────────────── */}
         {activeTab === 'shop' && <ShopPanel shopItemCount={inventory.length} />}
 
+        {/* ── Udhaar / khata ──────────────────────────────────────────────────── */}
+        {activeTab === 'khata' && <KhataPanel />}
+
         {/* ── Inventory tab ─────────────────────────────────────────────────── */}
         {activeTab === 'inventory' && (
           <div>
@@ -633,6 +670,21 @@ export default function OwnerApp({ initialReviewId, reviewOnly = false }: { init
                   {imeEnabled ? 'अ' : 'A'}
                 </button>
               </div>
+              {lowStock.length > 0 && (
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button onClick={() => { setLowOnly(v => !v); setStockPage(1); }}
+                    style={{ minHeight: 44, borderRadius: 999, padding: '0 14px', fontWeight: 700, cursor: 'pointer', border: '1.5px solid #DC2626',
+                      background: lowOnly ? '#DC2626' : 'white', color: lowOnly ? 'white' : '#DC2626' }}>
+                    ⚠️ Low stock ({lowStock.length}){lowOnly ? ' ✓' : ''}
+                  </button>
+                  {lowOnly && (
+                    <button onClick={shareToBuyList}
+                      style={{ minHeight: 44, borderRadius: 999, padding: '0 14px', fontWeight: 700, cursor: 'pointer', border: 'none', background: '#25D366', color: 'white' }}>
+                      📲 Send to-buy list
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
 
             <div>
@@ -649,7 +701,13 @@ export default function OwnerApp({ initialReviewId, reviewOnly = false }: { init
               {filteredStock.length === 0 ? (
                 <div className="kirana-empty">
                   <div style={{ fontSize: '2.5rem' }}>📦</div>
-                  <div style={{ fontWeight: 600, marginTop: 6 }}>{stockQuery ? 'No items match this search' : 'No items yet — tap ➕ Add or 📤 Import'}</div>
+                  <div style={{ fontWeight: 600, marginTop: 6 }}>{stockQuery || lowOnly ? 'No items match' : 'No items yet — tap ➕ Add or 📤 Import'}</div>
+                  {inventory.length === 0 && isFirebaseReady && (
+                    <button onClick={loadStarterList}
+                      style={{ marginTop: 14, minHeight: 48, borderRadius: 10, border: 'none', background: '#0a3d62', color: 'white', fontWeight: 800, padding: '0 18px', cursor: 'pointer' }}>
+                      📋 Start with the common kirana list
+                    </button>
+                  )}
                 </div>
               ) : (
                 <div className="inv-grid">{pagedStock.map(s => renderInventoryCard(s))}</div>
