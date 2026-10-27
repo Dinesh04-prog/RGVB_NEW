@@ -205,6 +205,53 @@ export const joinShopWithCode = async (user: AppUser, rawCode: string): Promise<
   await setDoc(doc(db, 'users', user.uid), { shopId, updatedAt: Date.now() });
 };
 
+// ── Cashier invites by Gmail: invites/{email} → the shop that person joins when they sign in ─
+
+export interface ShopInvite { email: string; shopId: string; shopName: string; invitedBy: string; createdAt: number }
+
+const emailKey = (email: string) => email.trim().toLowerCase();
+
+/** Owner: lets this Gmail join the shop as a cashier just by signing in. */
+export const inviteCashier = async (shop: Shop, invitedByUid: string, rawEmail: string) => {
+  if (!db) throw new Error('Firebase not configured');
+  const email = emailKey(rawEmail);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Enter a valid email address');
+  const invite: ShopInvite = { email, shopId: shop.id, shopName: shop.name, invitedBy: invitedByUid, createdAt: Date.now() };
+  try { await setDoc(doc(db, 'invites', email), invite); }
+  catch (err) {
+    // The rules refuse to overwrite another shop's invite for the same address
+    if ((err as { code?: string }).code === 'permission-denied') throw new Error('This email was already added by another shop.', { cause: err });
+    throw err;
+  }
+};
+
+export const cancelInvite = async (email: string) => {
+  if (!db) return;
+  await deleteDoc(doc(db, 'invites', emailKey(email)));
+};
+
+/** Owner: cashiers added by email who have not signed in yet. */
+export const subscribeToInvites = (shopId: string, cb: (invites: ShopInvite[]) => void) => {
+  if (!db) return () => {};
+  return onSnapshot(query(collection(db, 'invites'), where('shopId', '==', shopId)),
+    snap => cb(snap.docs.map(d => d.data() as ShopInvite).sort((a, b) => a.createdAt - b.createdAt)),
+    () => cb([]));
+};
+
+/** Signed-in user without a shop: joins the shop that added their email, if any. True when joined. */
+export const acceptInvite = async (user: AppUser): Promise<boolean> => {
+  if (!db || !user.email) return false;
+  const ref = doc(db, 'invites', emailKey(user.email));
+  const snap = await getDoc(ref).catch(() => null);
+  if (!snap?.exists()) return false;
+  const { shopId } = snap.data() as ShopInvite;
+  const me: ShopMember = { uid: user.uid, role: 'cashier', name: user.name, email: user.email, joinedAt: Date.now() };
+  await setDoc(doc(db, 'shops', shopId, 'members', user.uid), me);
+  await setDoc(doc(db, 'users', user.uid), { shopId, updatedAt: Date.now() });
+  await deleteDoc(ref).catch(() => { /* used once; the owner can tidy it up */ });
+  return true;
+};
+
 /** Owner: a new join code (the old one stops working). */
 export const changeJoinCode = async (shop: Shop): Promise<string> => {
   if (!db) throw new Error('Firebase not configured');

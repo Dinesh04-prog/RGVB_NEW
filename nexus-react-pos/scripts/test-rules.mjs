@@ -14,7 +14,7 @@ const check = async (name, fn) => {
   catch (err) { failures.push(name); console.log(`  ✗ ${name}\n      ${err?.message?.split('\n')[0]}`); }
 };
 
-const as = uid => env.authenticatedContext(uid, { email: `${uid}@test.com` }).firestore();
+const as = uid => env.authenticatedContext(uid, { email: `${uid}@test.com`, email_verified: true }).firestore();
 const anon = env.unauthenticatedContext().firestore();
 
 // What createShop() in src/lib/firebase.ts writes, in one batch
@@ -85,6 +85,27 @@ await check('owner removes the cashier', () => assertSucceeds(ownerA.doc('shops/
 await check('removed cashier loses access', () => assertFails(cashier.collection('shops/shopA/inventory').get()));
 await check('removed cashier can still see they are no longer a member', () => assertSucceeds(cashier.doc('shops/shopA/members/cashierA').get()));
 await check("cannot read another user's membership in another shop", () => assertFails(ownerB.doc('shops/shopA/members/ownerA').get()));
+
+console.log('Cashier added by Gmail');
+const invited = as('ramesh'), notInvited = as('suresh');
+const inviteA = { email: 'ramesh@test.com', shopId: 'shopA', shopName: 'A', invitedBy: 'ownerA', createdAt: 1 };
+await check('owner A adds a Gmail', () => assertSucceeds(ownerA.doc('invites/ramesh@test.com').set(inviteA)));
+await check('owner B cannot add a Gmail to shop A', () => assertFails(ownerB.doc('invites/x@test.com').set({ ...inviteA, email: 'x@test.com' })));
+await check('owner B cannot take over shop A\'s invite', () => assertFails(ownerB.doc('invites/ramesh@test.com').set({ ...inviteA, shopId: 'shopB' })));
+await check('invite id must be the lower-case email', () => assertFails(ownerA.doc('invites/Ramesh@test.com').set({ ...inviteA, email: 'Ramesh@test.com' })));
+await check('owner A lists shop A invites', () => assertSucceeds(ownerA.collection('invites').where('shopId', '==', 'shopA').get()));
+await check('owner B cannot list shop A invites', () => assertFails(ownerB.collection('invites').where('shopId', '==', 'shopA').get()));
+await check('invited person reads their invite', () => assertSucceeds(invited.doc('invites/ramesh@test.com').get()));
+await check('someone else cannot read it', () => assertFails(notInvited.doc('invites/ramesh@test.com').get()));
+await check('not-invited person cannot join without a code', () => assertFails(notInvited.doc('shops/shopA/members/suresh').set({ uid: 'suresh', role: 'cashier', joinedAt: 1 })));
+await check('invite does not open a different shop', () => assertFails(invited.doc('shops/shopB/members/ramesh').set({ uid: 'ramesh', role: 'cashier', joinedAt: 1 })));
+await check('invite cannot make you owner', () => assertFails(invited.doc('shops/shopA/members/ramesh').set({ uid: 'ramesh', role: 'owner', joinedAt: 1 })));
+await check('invited person joins by signing in', () => assertSucceeds(invited.doc('shops/shopA/members/ramesh').set({ uid: 'ramesh', role: 'cashier', name: 'r', email: 'ramesh@test.com', joinedAt: 1 })));
+await check('invited person clears their used invite', () => assertSucceeds(invited.doc('invites/ramesh@test.com').delete()));
+await check('owner cancels an invite', async () => {
+  await ownerA.doc('invites/later@test.com').set({ ...inviteA, email: 'later@test.com' });
+  return assertSucceeds(ownerA.doc('invites/later@test.com').delete());
+});
 
 console.log('Old single-shop inventory');
 await check('signed-in user can read the old inventory (for the import)', () => assertSucceeds(ownerA.collection('inventory').get()));

@@ -2,7 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useState } fr
 import { googleLogout } from '@react-oauth/google';
 import { doc, onSnapshot } from 'firebase/firestore';
 import {
-  db, onUserChanged, signOutUser, loadMyShop, setActiveShop, subscribeToShop,
+  db, onUserChanged, signOutUser, loadMyShop, acceptInvite, setActiveShop, subscribeToShop,
   type AppUser, type Shop, type ShopRole,
 } from '../lib/firebase';
 import { scopeLocalDataToShop } from '../lib/db';
@@ -32,7 +32,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
 
   const applyShop = useCallback(async (u: AuthUser | null) => {
-    const mine = u ? await loadMyShop(u.uid).catch(err => { console.error('Shop load failed:', err); return null; }) : null;
+    const load = (x: AuthUser) => loadMyShop(x.uid).catch(err => { console.error('Shop load failed:', err); return null; });
+    let mine = u ? await load(u) : null;
+    // No shop yet: the owner may have added this Gmail as a cashier → join straight away
+    if (u && !mine && await acceptInvite(u).catch(err => { console.error('Invite failed:', err); return false; })) mine = await load(u);
     if (mine) await scopeLocalDataToShop(mine.shop.id);
     setActiveShop(mine?.shop.id ?? null);
     setShop(mine?.shop ?? null);

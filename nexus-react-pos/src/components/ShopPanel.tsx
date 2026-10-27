@@ -2,12 +2,14 @@ import { useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import {
   changeJoinCode, removeMember, subscribeToMembers, legacyInventoryCount, importLegacyInventory,
-  type ShopMember,
+  inviteCashier, cancelInvite, subscribeToInvites,
+  type ShopMember, type ShopInvite,
 } from '../lib/firebase';
 import { openExternalUrl } from '../lib/androidApp';
 import { APP_NAME } from '../lib/appInfo';
 
-// Owner → ☰ → Shop: the join code for cashiers, who is in the shop, and the one-time import of the old shared inventory.
+// Owner → ☰ → Shop: add cashiers by Gmail (or a join code), who is in the shop, and the one-time import of the old
+// shared inventory.
 
 const CSS = `
   .sp-card { background: white; border-radius: 15px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); padding: 16px; margin-bottom: 14px; }
@@ -23,6 +25,9 @@ const CSS = `
   .sp-remove { min-height: 40px; border-radius: 8px; border: 1.5px solid #dc3545; color: #dc3545; background: white; font-weight: 700; cursor: pointer; padding: 0 12px; font-size: 0.8rem; flex-shrink: 0; }
   .sp-note { font-size: 0.82rem; color: #6b7280; }
   .sp-status { font-size: 0.85rem; font-weight: 600; color: #0a3d62; background: #e7f1ff; border-radius: 8px; padding: 8px 12px; margin-top: 10px; }
+  .sp-input { flex: 1; min-width: 0; height: 48px; border: 1.5px solid #cbd5e1; border-radius: 10px; padding: 0 12px; font-size: 1rem; }
+  .sp-input:focus { outline: none; border-color: #0a3d62; }
+  .sp-error { color: #DC2626; font-size: 0.82rem; font-weight: 600; margin-top: 6px; }
 `;
 
 export default function ShopPanel({ shopItemCount }: { shopItemCount: number }) {
@@ -32,8 +37,13 @@ export default function ShopPanel({ shopItemCount }: { shopItemCount: number }) 
   const [copied, setCopied] = useState(false);
   const [legacyCount, setLegacyCount] = useState(0);
   const [importStatus, setImportStatus] = useState('');
+  const [invites, setInvites] = useState<ShopInvite[]>([]);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteError, setInviteError] = useState('');
 
+  const shopId = shop?.id;
   useEffect(() => subscribeToMembers(setMembers), []);
+  useEffect(() => (shopId ? subscribeToInvites(shopId, setInvites) : undefined), [shopId]);
   useEffect(() => { legacyInventoryCount().then(setLegacyCount); }, []);
   useEffect(() => {
     if (!copied) return;
@@ -44,7 +54,7 @@ export default function ShopPanel({ shopItemCount }: { shopItemCount: number }) 
   if (!shop || !user) return null;
 
   const inviteText =
-    `Join ${shop.name} on ${APP_NAME}.\n1. Open the app and sign in with Google\n2. Tap "Join a shop"\n3. Enter code: ${shop.joinCode}`;
+    `Join ${shop.name} on ${APP_NAME}.\n1. Open the app and sign in with Google\n2. Tap "Join with a code"\n3. Enter code: ${shop.joinCode}`;
 
   const copyCode = async () => {
     try { await navigator.clipboard.writeText(shop.joinCode); setCopied(true); } catch { /* clipboard blocked */ }
@@ -60,6 +70,16 @@ export default function ShopPanel({ shopItemCount }: { shopItemCount: number }) 
   const remove = async (m: ShopMember) => {
     if (!confirm(`Remove ${m.name || m.email} from the shop? They will no longer be able to open it.`)) return;
     try { await removeMember(m.uid); } catch (err) { console.error(err); alert('Could not remove. Check the internet connection.'); }
+  };
+
+  const addCashier = async () => {
+    const email = inviteEmail.trim().toLowerCase();
+    if (!email) return;
+    if (members.some(m => m.email.toLowerCase() === email)) { setInviteError('This person is already in the shop.'); return; }
+    setBusy(true); setInviteError('');
+    try { await inviteCashier(shop, user.uid, email); setInviteEmail(''); }
+    catch (err) { console.error(err); setInviteError(err instanceof Error ? err.message : 'Could not add. Check the internet connection.'); }
+    finally { setBusy(false); }
   };
 
   const runImport = async () => {
@@ -86,8 +106,29 @@ export default function ShopPanel({ shopItemCount }: { shopItemCount: number }) 
       </div>
 
       <div className="sp-card">
-        <div className="sp-title">🔑 Code for cashiers</div>
-        <div className="sp-note">A cashier signs in, taps <b>Join a shop</b> and types this code.</div>
+        <div className="sp-title">➕ Add a cashier</div>
+        <div className="sp-note">Type the cashier's Gmail. When they sign in to {APP_NAME} with that Google account, they go straight to billing.</div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+          <input className="sp-input" type="email" inputMode="email" autoComplete="off" placeholder="cashier@gmail.com"
+            value={inviteEmail} onChange={e => { setInviteEmail(e.target.value); setInviteError(''); }}
+            onKeyDown={e => { if (e.key === 'Enter') addCashier(); }} />
+          <button className="sp-btn" style={{ background: '#16A34A', flex: '0 0 auto', minWidth: 90 }} disabled={busy || !inviteEmail.trim()} onClick={addCashier}>Add</button>
+        </div>
+        {inviteError && <div className="sp-error">{inviteError}</div>}
+        {invites.map(inv => (
+          <div key={inv.email} className="sp-member">
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 700, overflowWrap: 'anywhere' }}>{inv.email}</div>
+              <div className="sp-note">⏳ Added — joins when they first sign in</div>
+            </div>
+            <button className="sp-remove" onClick={() => cancelInvite(inv.email).catch(err => console.error(err))}>Cancel</button>
+          </div>
+        ))}
+      </div>
+
+      <div className="sp-card">
+        <div className="sp-title">🔑 Or share a code</div>
+        <div className="sp-note">For a cashier you did not add above: they sign in, tap <b>Join with a code</b> and type this.</div>
         <div className="sp-code" aria-label="Join code">{shop.joinCode}</div>
         <div className="sp-row">
           <button className="sp-btn" style={{ background: '#25D366' }}
@@ -111,7 +152,7 @@ export default function ShopPanel({ shopItemCount }: { shopItemCount: number }) 
             {m.role !== 'owner' && <button className="sp-remove" onClick={() => remove(m)}>Remove</button>}
           </div>
         ))}
-        {members.length <= 1 && <div className="sp-note" style={{ marginTop: 6 }}>No cashiers yet. Share the code above.</div>}
+        {members.length <= 1 && <div className="sp-note" style={{ marginTop: 6 }}>No cashiers yet. Add one above.</div>}
       </div>
 
       {legacyCount > 0 && (

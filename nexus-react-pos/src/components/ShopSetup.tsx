@@ -3,7 +3,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { createShop, joinShopWithCode } from '../lib/firebase';
 import { APP_NAME } from '../lib/appInfo';
 
-// First screen after sign-in for someone without a shop: create one (becomes its owner) or join one with a code (cashier).
+// First screen after sign-in for someone without a shop. A cashier is normally added by Gmail (the owner's Shop page)
+// and never sees this; otherwise: check again after being added, join with a code, or create a shop (owner, confirmed).
 
 const CSS = `
   .ss-wrap { min-height: 100vh; background: linear-gradient(135deg, #0a3d62 0%, #145c91 100%); display: flex; align-items: flex-start; justify-content: center; padding: 24px 16px; font-family: 'Segoe UI', sans-serif; box-sizing: border-box; }
@@ -19,9 +20,13 @@ const CSS = `
   .ss-btn:disabled { opacity: 0.6; cursor: default; }
   .ss-link { background: none; border: none; color: #0a3d62; font-weight: 700; cursor: pointer; min-height: 44px; padding: 0 6px; font-size: 0.9rem; }
   .ss-error { color: #DC2626; font-size: 0.85rem; font-weight: 600; margin-top: 10px; }
+  .ss-box { background: #f0f7ff; border: 1.5px solid #bfdbfe; border-radius: 14px; padding: 14px; margin-bottom: 14px; }
+  .ss-btn2 { width: 100%; min-height: 48px; border: 1.5px solid #0a3d62; border-radius: 12px; background: white; color: #0a3d62; font-weight: 800; font-size: 0.95rem; cursor: pointer; margin-top: 10px; }
+  .ss-btn2:disabled { opacity: 0.6; cursor: default; }
+  .ss-or { text-align: center; color: #9ca3af; font-size: 0.8rem; font-weight: 700; margin: 14px 0 10px; }
 `;
 
-type Mode = 'choose' | 'create' | 'join';
+type Mode = 'choose' | 'confirmOwner' | 'create' | 'join';
 
 export default function ShopSetup() {
   const { user, refreshShop, logout } = useAuth();
@@ -33,8 +38,15 @@ export default function ShopSetup() {
   const [phone, setPhone] = useState('');
   const [whatsapp, setWhatsapp] = useState('');
   const [code, setCode] = useState('');
+  const [notAddedYet, setNotAddedYet] = useState(false);
 
   if (!user) return null;
+
+  // Owner added this Gmail after the cashier signed in: look again (joins and leaves this screen if so)
+  const checkAgain = async () => {
+    setBusy(true); setNotAddedYet(false);
+    try { await refreshShop(); } finally { setBusy(false); setNotAddedYet(true); }
+  };
 
   const run = async (fn: () => Promise<void>) => {
     setBusy(true); setError('');
@@ -72,16 +84,37 @@ export default function ShopSetup() {
 
         {mode === 'choose' && (
           <>
-            <button className="ss-choice" onClick={() => { setMode('create'); setError(''); }}>
+            <div className="ss-box">
+              <div style={{ fontWeight: 800, color: '#0a3d62', fontSize: '1rem' }}>👤 Work at a shop?</div>
+              <div style={{ fontSize: '0.88rem', color: '#374151', marginTop: 6, lineHeight: 1.45 }}>
+                Ask the owner to add <b style={{ overflowWrap: 'anywhere' }}>{user.email}</b> in their app
+                (☰ → Shop & Cashiers). Then tap:
+              </div>
+              <button className="ss-btn" style={{ marginTop: 12 }} disabled={busy} onClick={checkAgain}>
+                {busy ? 'Checking…' : '🔄 I was added — open the shop'}
+              </button>
+              {notAddedYet && <div className="ss-error">Not added yet. The owner must add exactly <b>{user.email}</b>.</div>}
+              <button className="ss-btn2" onClick={() => { setMode('join'); setError(''); }}>🔑 I have a 6-digit code</button>
+            </div>
+
+            <div className="ss-or">— OWN A SHOP? —</div>
+            <button className="ss-choice" onClick={() => { setMode('confirmOwner'); setError(''); }}>
               <span style={{ fontSize: '2rem' }}>🏪</span>
               <span><b style={{ fontSize: '1.05rem', color: '#0a3d62' }}>Create my shop</b><br />
-                <span style={{ fontSize: '0.85rem', color: '#6b7280' }}>I own the shop. I will add items and cashiers.</span></span>
+                <span style={{ fontSize: '0.85rem', color: '#6b7280' }}>Only for the shop owner. You will add items and cashiers.</span></span>
             </button>
-            <button className="ss-choice" onClick={() => { setMode('join'); setError(''); }}>
-              <span style={{ fontSize: '2rem' }}>🔑</span>
-              <span><b style={{ fontSize: '1.05rem', color: '#0a3d62' }}>Join a shop</b><br />
-                <span style={{ fontSize: '0.85rem', color: '#6b7280' }}>I work at a shop. The owner gave me a 6-digit code.</span></span>
-            </button>
+          </>
+        )}
+
+        {mode === 'confirmOwner' && (
+          <>
+            <div style={{ fontWeight: 800, fontSize: '1.1rem', color: '#0a3d62' }}>Are you the owner of the shop?</div>
+            <p style={{ fontSize: '0.9rem', color: '#374151', lineHeight: 1.5 }}>
+              Creating a shop makes you its <b>owner</b>, with a new empty shop.<br />
+              If you <b>work at someone else's shop</b>, do not create one: ask the owner to add your Gmail instead.
+            </p>
+            <button className="ss-btn" onClick={() => setMode('create')}>Yes, I am the owner</button>
+            <button className="ss-btn2" onClick={() => setMode('choose')}>No, I work at a shop</button>
           </>
         )}
 
@@ -103,8 +136,8 @@ export default function ShopSetup() {
 
         {mode === 'join' && (
           <>
-            <div style={{ fontWeight: 800, fontSize: '1.1rem', color: '#0a3d62' }}>🔑 Join a shop</div>
-            <p style={{ fontSize: '0.85rem', color: '#6b7280', margin: '6px 0 0' }}>Ask the owner for the code. It is in their app under ☰ → Shop.</p>
+            <div style={{ fontWeight: 800, fontSize: '1.1rem', color: '#0a3d62' }}>🔑 Join with a code</div>
+            <p style={{ fontSize: '0.85rem', color: '#6b7280', margin: '6px 0 0' }}>The owner finds the code in their app under ☰ → Shop & Cashiers.</p>
             <label className="ss-label">6-DIGIT CODE</label>
             <input className="ss-input ss-code" value={code} inputMode="numeric" maxLength={6} autoFocus
               onChange={e => setCode(digits(e.target.value).slice(0, 6))}

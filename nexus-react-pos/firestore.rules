@@ -4,6 +4,7 @@ rules_version = '2';
 //
 //   users/{uid}                       → { shopId }            the shop this person uses (only they can read it)
 //   joinCodes/{code}                  → { shopId }            6-digit code a cashier types to join
+//   invites/{email}                   → { shopId, ... }       Gmail the owner added; that person joins by signing in
 //   shops/{shopId}                    → shop profile          members read, owner edits
 //   shops/{shopId}/members/{uid}      → { role, ... }         owner | cashier
 //   shops/{shopId}/inventory/{item}   → items                 members read and write
@@ -20,6 +21,13 @@ service cloud.firestore {
     function isMember(shopId) { return signedIn() && exists(memberPath(shopId, request.auth.uid)); }
     function isOwner(shopId) {
       return isMember(shopId) && get(memberPath(shopId, request.auth.uid)).data.role == 'owner';
+    }
+    // The signed-in Google account's email, lower-case (Google accounts are verified)
+    function myEmail() { return request.auth.token.email.lower(); }
+    function invitePath(email) { return /databases/$(database)/documents/invites/$(email); }
+    function invitedTo(shopId) {
+      return signedIn() && request.auth.token.email_verified == true
+        && exists(invitePath(myEmail())) && get(invitePath(myEmail())).data.shopId == shopId;
     }
     // During the batch that creates a shop, the shop and owner records exist only "after" the write
     function ownsShopAfter(shopId) {
@@ -38,6 +46,15 @@ service cloud.firestore {
       allow delete: if isOwner(resource.data.shopId);
     }
 
+    match /invites/{email} {
+      // The invited person reads their own invite; the owner sees (and lists) their shop's invites
+      allow read: if (signedIn() && myEmail() == email) || isOwner(resource.data.shopId);
+      // Never overwrites another shop's invite (that would be an update)
+      allow create: if isOwner(request.resource.data.shopId)
+        && request.resource.data.email == email && email == email.lower();
+      allow delete: if isOwner(resource.data.shopId) || (signedIn() && myEmail() == email);
+    }
+
     match /shops/{shopId} {
       allow read: if isMember(shopId);
       allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid
@@ -51,9 +68,10 @@ service cloud.firestore {
         allow create: if signedIn() && request.auth.uid == uid && (
           // the shop's creator, in the same batch as the shop
           (request.resource.data.role == 'owner' && ownsShopAfter(shopId))
-          // a cashier who knows the shop's current code
-          || (request.resource.data.role == 'cashier'
-              && request.resource.data.joinCode == get(shopPath(shopId)).data.joinCode)
+          // a cashier who knows the shop's current code, or whose Gmail the owner added
+          || (request.resource.data.role == 'cashier' && (
+              request.resource.data.get('joinCode', '') == get(shopPath(shopId)).data.joinCode
+              || invitedTo(shopId)))
         );
         allow update: if false;
         // The owner removes cashiers; anyone may leave; the owner record itself stays
