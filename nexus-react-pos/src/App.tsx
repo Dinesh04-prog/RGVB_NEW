@@ -14,6 +14,7 @@ import { saveSale, getSalesHistory } from "./lib/db";
 import type { CartItem, Receipt } from "./lib/db";
 import { translateHinglishToMarathi, transliterateDevanagariToLatin, normalizeForSearch, HINGLISH_TO_MARATHI, parseUserQuery, scoreCandidate } from "./lib/phonetic";
 import { itemNameFields, makeSearchKey, withItemNames } from "./lib/itemNames";
+import { getUnitMultiplier, STANDARD_UNITS } from "./lib/units";
 import { usePhotoScanFill } from "./lib/usePhotoScanFill";
 import { InventoryTile, ItemThumb, INVENTORY_TILE_CSS } from "./components/InventoryTile";
 import { ItemImageField } from "./components/ItemImageField";
@@ -42,28 +43,6 @@ interface InventoryItem {
   full_name_eng?: string; // long name read from the pack (search only; name/name_eng hold the short name)
   image?: string;        // small JPEG data URL (≤ 25 KB), see lib/itemImage.ts
 }
-
-const getUnitMultiplier = (targetUnit: string, baseUnit: string) => {
-  const t = targetUnit.trim().toLowerCase();
-  const b = baseUnit.trim().toLowerCase();
-  if (t === b) return 1;
-
-  const isKg = (u: string) => /^(kg|kilo|kilograms?|kilos?)$/.test(u);
-  const isG = (u: string) => /^(g|gm|grams?)$/.test(u);
-  const isL = (u: string) => /^(l|lit|liters?|litres?)$/.test(u);
-  const isMl = (u: string) => /^(ml|mili|mililiters?|milliliters?|mal)$/.test(u);
-  const isPcs = (u: string) => /^(pc|pcs|pieces?|units?|nos?|numbers?|pack|packet|box)$/.test(u);
-  const isDozen = (u: string) => /^(dz|dozens?|dzn)$/.test(u);
-
-  if (isG(t) && isKg(b)) return 1 / 1000;
-  if (isKg(t) && isG(b)) return 1000;
-  if (isMl(t) && isL(b)) return 1 / 1000;
-  if (isL(t) && isMl(b)) return 1000;
-  if (isDozen(t) && isPcs(b)) return 12;
-  if (isPcs(t) && isDozen(b)) return 1 / 12;
-
-  return 1;
-};
 
 export default function App() {
   const { user, logout } = useAuth();
@@ -2980,7 +2959,7 @@ export default function App() {
                 {(() => {
                   const baseUnit = modalItem.item.unit || "unit";
                   const customUnits = Object.keys((modalItem.item as InventoryItem).unit_rates || {});
-                  const standardUnits = ['g', 'kg', 'l', 'box', 'mal', 'ml', 'dozen', 'pcs', 'bag', 'packet'];
+                  const standardUnits = STANDARD_UNITS;
                   const allUnits = [baseUnit, ...new Set([...customUnits, ...standardUnits].filter(u => u !== baseUnit))];
                   return allUnits.map(opt => (
                     <option key={opt} value={opt}>

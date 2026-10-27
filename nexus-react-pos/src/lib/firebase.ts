@@ -1,7 +1,7 @@
 import { initializeApp, getApps } from 'firebase/app';
 import {
   getFirestore, doc, setDoc, updateDoc,
-  onSnapshot, collection, query, where, orderBy, deleteDoc, writeBatch,
+  onSnapshot, collection, query, where, orderBy, limit, deleteDoc, writeBatch,
 } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import type { CartItem } from './db';
@@ -99,21 +99,30 @@ export const subscribeToPendingReviews = (
   cb: (sessions: ReviewSession[]) => void
 ) => {
   if (!db) return () => {};
-  const q = query(
-    collection(db, 'reviews'),
-    where('status', '==', 'pending'),
-    orderBy('createdAt', 'desc')
+  // Sorted here, not in the query: where(status) + orderBy(createdAt) needs a composite index the project does not have
+  const q = query(collection(db, 'reviews'), where('status', '==', 'pending'));
+  return onSnapshot(q, snap =>
+    cb(snap.docs.map(d => d.data() as ReviewSession).sort((a, b) => b.createdAt - a.createdAt))
   );
+};
+
+// Newest bills first, at most `max` of them (reviews are never deleted, so the full list only grows).
+export const subscribeToRecentReviews = (
+  max: number, cb: (sessions: ReviewSession[]) => void
+) => {
+  if (!db) return () => {};
+  const q = query(collection(db, 'reviews'), orderBy('createdAt', 'desc'), limit(max));
   return onSnapshot(q, snap =>
     cb(snap.docs.map(d => d.data() as ReviewSession))
   );
 };
 
-export const subscribeToAllReviews = (
-  cb: (sessions: ReviewSession[]) => void
+// Every bill sent since `since` (ms), e.g. the start of today, for the owner's day summary.
+export const subscribeToReviewsSince = (
+  since: number, cb: (sessions: ReviewSession[]) => void
 ) => {
   if (!db) return () => {};
-  const q = query(collection(db, 'reviews'), orderBy('createdAt', 'desc'));
+  const q = query(collection(db, 'reviews'), where('createdAt', '>=', since), orderBy('createdAt', 'desc'));
   return onSnapshot(q, snap =>
     cb(snap.docs.map(d => d.data() as ReviewSession))
   );

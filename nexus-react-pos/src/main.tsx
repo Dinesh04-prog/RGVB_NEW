@@ -46,8 +46,10 @@ function AuthGate() {
   );
 
   if (!user) return <LoginPage />;
-  // Owner email or anyone with a direct review link → owner interface
-  if (isOwner || reviewId) return <OwnerApp initialReviewId={reviewId} />;
+  // Owner email → full owner interface. Anyone else with a direct review link → only that bill
+  // (no owner dashboard or inventory editing).
+  if (isOwner) return <OwnerApp initialReviewId={reviewId} />;
+  if (reviewId) return <OwnerApp initialReviewId={reviewId} reviewOnly />;
   return <App />;
 }
 
