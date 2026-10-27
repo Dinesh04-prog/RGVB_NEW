@@ -47,7 +47,7 @@ service cloud.firestore {
       allow delete: if isOwner(shopId);
 
       match /members/{uid} {
-        allow read: if isMember(shopId);
+        allow read: if isMember(shopId) || (signedIn() && request.auth.uid == uid);
         allow create: if signedIn() && request.auth.uid == uid && (
           // the shop's creator, in the same batch as the shop
           (request.resource.data.role == 'owner' && ownsShopAfter(shopId))

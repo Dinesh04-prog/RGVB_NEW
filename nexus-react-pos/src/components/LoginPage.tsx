@@ -41,18 +41,24 @@ export default function LoginPage() {
           <p style={{ margin: '0 0 1.25rem', color: '#374151', fontSize: '0.95rem', fontWeight: 500 }}>
             {busy ? 'Signing in…' : 'Sign in to continue'}
           </p>
-          <div style={{ display: 'flex', justifyContent: 'center', opacity: busy ? 0.5 : 1, pointerEvents: busy ? 'none' : undefined }}>
-            <GoogleLogin
-              onSuccess={cred => { if (cred.credential) run(() => signInWithGoogleIdToken(cred.credential!)); }}
-              onError={() => setError('Google sign-in failed. Please try again.')}
-              shape="pill" size="large" text="signin_with" logo_alignment="center"
-            />
-          </div>
-          {error && <p style={{ color: '#DC2626', fontSize: '0.85rem', fontWeight: 600, margin: '1rem 0 0' }}>{error}</p>}
+          {/* Real Google accounts cannot sign in to the local test emulator, so test mode shows only the test box */}
+          {!usingEmulators && (
+            <div style={{ display: 'flex', justifyContent: 'center', opacity: busy ? 0.5 : 1, pointerEvents: busy ? 'none' : undefined }}>
+              <GoogleLogin
+                onSuccess={cred => { if (cred.credential) run(() => signInWithGoogleIdToken(cred.credential!)); }}
+                onError={() => setError('Google sign-in failed. Please try again.')}
+                shape="pill" size="large" text="signin_with" logo_alignment="center"
+              />
+            </div>
+          )}
 
           {usingEmulators && (
-            <div style={{ marginTop: '1.25rem', paddingTop: '1rem', borderTop: '1px dashed #cbd5e1' }}>
-              <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#b45309', marginBottom: 6 }}>TEST MODE (emulator)</div>
+            <div>
+              <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#b45309', marginBottom: 4 }}>TEST MODE (local emulator)</div>
+              <div style={{ fontSize: '0.8rem', color: '#6b7280', marginBottom: 8, textAlign: 'left' }}>
+                Type any email, e.g. <b>owner@test.com</b> for the owner or <b>cashier@test.com</b> for a cashier, then tap Sign in.
+                No password; nothing goes to the real shop.
+              </div>
               <input value={testEmail} onChange={e => setTestEmail(e.target.value)} aria-label="Test email"
                 style={{ width: '100%', height: 44, borderRadius: 8, border: '1.5px solid #cbd5e1', padding: '0 10px', fontSize: '0.95rem', marginBottom: 8, boxSizing: 'border-box' }} />
               <button disabled={busy} onClick={() => run(() => signInTestUser(testEmail.trim(), testEmail.split('@')[0]))}
@@ -61,6 +67,7 @@ export default function LoginPage() {
               </button>
             </div>
           )}
+          {error && <p style={{ color: '#DC2626', fontSize: '0.85rem', fontWeight: 600, margin: '1rem 0 0' }}>{error}</p>}
         </div>
 
         <p style={{ color: '#9ca3af', fontSize: '0.75rem', margin: 0 }}>Secure sign-in powered by Google</p>

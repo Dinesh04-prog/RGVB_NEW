@@ -83,6 +83,8 @@ await check('old code no longer joins', () => assertFails(stranger.doc('shops/sh
 await check('owner record cannot be deleted', () => assertFails(ownerA.doc('shops/shopA/members/ownerA').delete()));
 await check('owner removes the cashier', () => assertSucceeds(ownerA.doc('shops/shopA/members/cashierA').delete()));
 await check('removed cashier loses access', () => assertFails(cashier.collection('shops/shopA/inventory').get()));
+await check('removed cashier can still see they are no longer a member', () => assertSucceeds(cashier.doc('shops/shopA/members/cashierA').get()));
+await check("cannot read another user's membership in another shop", () => assertFails(ownerB.doc('shops/shopA/members/ownerA').get()));
 
 console.log('Old single-shop inventory');
 await check('signed-in user can read the old inventory (for the import)', () => assertSucceeds(ownerA.collection('inventory').get()));

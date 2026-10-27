@@ -2099,7 +2099,7 @@ export default function App() {
         {user && (
           <div style={{ padding: '1rem', borderTop: '1px solid rgba(255,255,255,0.15)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
-              <img src={user.picture} alt="" style={{ width: 34, height: 34, borderRadius: '50%', flexShrink: 0 }} />
+              {user.picture && <img src={user.picture} alt="" style={{ width: 34, height: 34, borderRadius: '50%', flexShrink: 0 }} />}
               <div style={{ overflow: 'hidden' }}>
                 <div style={{ fontSize: '0.85rem', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user.name}</div>
                 <div style={{ fontSize: '0.7rem', opacity: 0.65, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user.email}</div>
