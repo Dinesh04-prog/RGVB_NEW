@@ -17,6 +17,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewClientCompat
 import org.json.JSONObject
@@ -58,12 +60,13 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        keepClearOfSystemBars(findViewById(R.id.root))
 
         btManager = BluetoothPrintManager(this)
         webView = findViewById(R.id.webView)
 
         setupWebView()
-        requestAllPermissions()
+        // No permission prompts at start: camera, microphone and Bluetooth are asked for when a feature needs them
         webView.loadUrl("https://appassets.androidplatform.net/index.html")
     }
 
@@ -199,9 +202,17 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            // Grant camera / microphone to web app automatically (already requested at OS level)
+            // The web app wants the camera (barcode scan) or microphone (voice search): ask Android now, then answer
             override fun onPermissionRequest(request: PermissionRequest?) {
-                request?.grant(request.resources)
+                request ?: return
+                val needed = request.resources.mapNotNull {
+                    when (it) {
+                        PermissionRequest.RESOURCE_VIDEO_CAPTURE -> Manifest.permission.CAMERA
+                        PermissionRequest.RESOURCE_AUDIO_CAPTURE -> Manifest.permission.RECORD_AUDIO
+                        else -> null
+                    }
+                }
+                runOnUiThread { withPermissions(needed) { ok -> if (ok) request.grant(request.resources) else request.deny() } }
             }
 
             // Geolocation prompt (not needed but prevents silent failures)
@@ -333,43 +344,48 @@ class MainActivity : AppCompatActivity() {
         return try { file.readText().also { file.delete() } } catch (e: Exception) { null }
     }
 
-    private fun requestAllPermissions() {
-        val needed = mutableListOf(
-            Manifest.permission.CAMERA,
-            Manifest.permission.RECORD_AUDIO
-        )
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            needed += Manifest.permission.BLUETOOTH_CONNECT
-            needed += Manifest.permission.BLUETOOTH_SCAN
-        } else {
-            needed += Manifest.permission.BLUETOOTH
-            needed += Manifest.permission.BLUETOOTH_ADMIN
-            needed += Manifest.permission.ACCESS_FINE_LOCATION
-        }
+    // ── Permissions, asked only when a feature needs them ────────────────────
 
-        val denied = needed.filter {
+    private val permissionCallbacks = mutableMapOf<Int, (Boolean) -> Unit>()
+    private var nextPermissionRequest = PERMISSION_REQUEST
+
+    /** Runs [then] with true when all [permissions] are granted (asking Android first if needed), else false. */
+    fun withPermissions(permissions: List<String>, then: (Boolean) -> Unit) {
+        val missing = permissions.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
-        if (denied.isNotEmpty()) {
-            ActivityCompat.requestPermissions(this, denied.toTypedArray(), PERMISSION_REQUEST)
-        }
+        if (missing.isEmpty()) { then(true); return }
+        val code = nextPermissionRequest++
+        permissionCallbacks[code] = then
+        ActivityCompat.requestPermissions(this, missing.toTypedArray(), code)
     }
+
+    /** Printing to a paired printer: Android 12+ asks for "Nearby devices"; older Android grants it at install. */
+    fun bluetoothPermissions(): List<String> =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+            listOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN)
+        else emptyList()
 
     override fun onRequestPermissionsResult(
         requestCode: Int, permissions: Array<String>, grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == PERMISSION_REQUEST) {
-            val denied = permissions.filterIndexed { i, _ ->
-                grantResults.getOrElse(i) { PackageManager.PERMISSION_DENIED } != PackageManager.PERMISSION_GRANTED
-            }
-            if (denied.isNotEmpty()) {
-                Toast.makeText(
-                    this,
-                    "Some features need permissions: ${denied.joinToString { it.substringAfterLast('.') }}",
-                    Toast.LENGTH_LONG
-                ).show()
-            }
+        val callback = permissionCallbacks.remove(requestCode) ?: return
+        val granted = grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }
+        if (!granted) {
+            Toast.makeText(this, "Allow the permission in Settings → Apps → Kirana POS to use this feature", Toast.LENGTH_LONG).show()
+        }
+        callback(granted)
+    }
+
+    /** Android 15+ draws apps under the status and navigation bars: pad the content so nothing hides behind them. */
+    private fun keepClearOfSystemBars(view: android.view.View) {
+        ViewCompat.setOnApplyWindowInsetsListener(view) { v, insets ->
+            val bars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout() or WindowInsetsCompat.Type.ime()
+            )
+            v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            WindowInsetsCompat.CONSUMED
         }
     }
 

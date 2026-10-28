@@ -13,12 +13,22 @@ class AndroidBtBridge(private val activity: MainActivity) {
 
     @JavascriptInterface
     fun showDevicePicker() {
-        activity.runOnUiThread { btManager.showDevicePicker() }
+        activity.runOnUiThread {
+            activity.withPermissions(activity.bluetoothPermissions()) { ok ->
+                if (ok) btManager.showDevicePicker()
+                else activity.webView.evaluateJavascript("window.onBtDeviceCancelled && window.onBtDeviceCancelled()", null)
+            }
+        }
     }
 
     @JavascriptInterface
     fun connectDevice(address: String) {
-        btManager.connectDevice(address)
+        activity.runOnUiThread {
+            activity.withPermissions(activity.bluetoothPermissions()) { ok ->
+                if (ok) btManager.connectDevice(address)
+                else activity.webView.evaluateJavascript("window.onBtConnectFailed && window.onBtConnectFailed('permission')", null)
+            }
+        }
     }
 
     @JavascriptInterface

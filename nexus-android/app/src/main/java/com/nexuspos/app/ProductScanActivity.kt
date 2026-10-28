@@ -1,5 +1,7 @@
 package com.nexuspos.app
 
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
@@ -514,6 +516,12 @@ class ProductScanActivity : AppCompatActivity() {
         top.bringToFront()
 
         setContentView(root)
+        // Android 15+ draws under the status / navigation bars: keep the buttons clear of them
+        ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+            v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            WindowInsetsCompat.CONSUMED
+        }
     }
 
     /** Dims everything outside the guide frame and shows a ring where the user tapped to focus. */

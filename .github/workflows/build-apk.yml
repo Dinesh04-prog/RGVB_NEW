@@ -1,4 +1,4 @@
-name: Build NexusPOS Android APK
+name: Build Kirana POS Android app (APK + Play bundle)
 
 on:
   push:
@@ -32,8 +32,6 @@ jobs:
         run: npm run build
         env:
           VITE_GOOGLE_CLIENT_ID: "786802419853-8m6fpah9na9ecdhfc8fo8d55e3b5r728.apps.googleusercontent.com"
-          VITE_OWNER_EMAIL: "rajendragvb2801@gmail.com"
-          VITE_OWNER_PHONE: "917385391971"
           VITE_APP_URL: "https://appassets.androidplatform.net"
           VITE_FIREBASE_API_KEY: "AIzaSyArkZiqGAUJRqiBKQmYndBWTfpDq-4SWiM"
           VITE_FIREBASE_AUTH_DOMAIN: "nexus-pos-817c3.firebaseapp.com"
@@ -52,46 +50,6 @@ jobs:
         run: |
           mkdir -p nexus-android/app/src/main/assets
           cp -r nexus-react-pos/dist/. nexus-android/app/src/main/assets/
-          cp nexus-react-pos/public/shop-logo.jpeg nexus-android/app/src/main/assets/shop-logo.jpeg
-
-      # ── 4. Generate app icons from company logo ──────────────────────────────
-      - name: Generate app icons from shop-logo.jpeg
-        run: |
-          pip install Pillow --quiet
-          python3 - <<'EOF'
-          import os
-          from PIL import Image, ImageDraw
-
-          logo = Image.open("nexus-react-pos/public/shop-logo.jpeg").convert("RGBA")
-
-          sizes = {
-              "mdpi":    48,
-              "hdpi":    72,
-              "xhdpi":   96,
-              "xxhdpi":  144,
-              "xxxhdpi": 192,
-          }
-
-          for dpi, size in sizes.items():
-              out = f"nexus-android/app/src/main/res/mipmap-{dpi}"
-              os.makedirs(out, exist_ok=True)
-
-              img = logo.resize((size, size), Image.LANCZOS)
-
-              # Square launcher icon
-              bg = Image.new("RGBA", (size, size), (255, 255, 255, 255))
-              bg.paste(img, mask=img.split()[3])
-              bg.convert("RGB").save(f"{out}/ic_launcher.png")
-
-              # Round launcher icon (circular crop with white bg)
-              mask = Image.new("L", (size, size), 0)
-              ImageDraw.Draw(mask).ellipse((0, 0, size - 1, size - 1), fill=255)
-              bg2 = Image.new("RGBA", (size, size), (255, 255, 255, 255))
-              bg2.paste(img, mask=mask)
-              bg2.convert("RGB").save(f"{out}/ic_launcher_round.png")
-
-          print("Icons generated successfully")
-          EOF
 
       # ── 5. Build Android APK ─────────────────────────────────────────────────
       - name: Set up Java 17
@@ -112,14 +70,29 @@ jobs:
           "$SDKMANAGER" --version
           # 'yes' is killed by SIGPIPE when sdkmanager stops reading; don't let pipefail treat that as an error
           (yes || true) | "$SDKMANAGER" --licenses > /dev/null
-          "$SDKMANAGER" --install "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+          "$SDKMANAGER" --install "platforms;android-36" "build-tools;35.0.0" "platform-tools"
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
 
-      - name: Install Gradle 8.6
+      - name: Install Gradle 8.14.3
         run: |
-          wget -q https://services.gradle.org/distributions/gradle-8.6-bin.zip -O /tmp/gradle.zip
+          wget -q https://services.gradle.org/distributions/gradle-8.14.3-bin.zip -O /tmp/gradle.zip
           sudo unzip -q /tmp/gradle.zip -d /opt
-          echo "/opt/gradle-8.6/bin" >> $GITHUB_PATH
+          echo "/opt/gradle-8.14.3/bin" >> $GITHUB_PATH
+
+      # Release signing for Google Play. Secrets (Settings → Secrets → Actions): KEYSTORE_BASE64 (the .jks file as
+      # base64), KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD. Without them the build is signed with the debug key
+      # (fine to install and test, not accepted by Play).
+      - name: Release signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+            echo "Signing with the release key"
+          else
+            echo "::warning::No KEYSTORE_BASE64 secret: signed with the debug key (not for Google Play)"
+          fi
 
       # Label parser tests (pure JVM). A failure stops the build before the APK is made.
       - name: Run unit tests
@@ -131,12 +104,17 @@ jobs:
           GEMINI_WORKER_URL: ${{ secrets.GEMINI_WORKER_URL }}
           GEMINI_APP_KEY: ${{ secrets.GEMINI_APP_KEY }}
 
-      - name: Build release APK
+      - name: Build release APK and Play bundle (AAB)
         working-directory: nexus-android
-        run: gradle assembleRelease --no-daemon
+        run: gradle assembleRelease bundleRelease --no-daemon
         env:
           GEMINI_WORKER_URL: ${{ secrets.GEMINI_WORKER_URL }}
           GEMINI_APP_KEY: ${{ secrets.GEMINI_APP_KEY }}
+          # Every build gets a higher version number (Play requires it): the GitHub run number
+          VERSION_CODE: ${{ github.run_number }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
 
       - name: Print APK size
         run: |
@@ -147,8 +125,16 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: NexusPOS-${{ github.run_number }}
+          name: KiranaPOS-${{ github.run_number }}
           path: nexus-android/app/build/outputs/apk/release/app-release.apk
+          retention-days: 30
+
+      # The file to upload to the Google Play Console
+      - name: Upload Play bundle (AAB)
+        uses: actions/upload-artifact@v4
+        with:
+          name: KiranaPOS-${{ github.run_number }}-play-bundle
+          path: nexus-android/app/build/outputs/bundle/release/app-release.aab
           retention-days: 30
 
       # ── 7. Print download instructions in the run log ────────────────────────
@@ -157,6 +143,6 @@ jobs:
           echo "========================================"
           echo "  APK build complete!"
           echo "  Go to: Actions tab → this run → Artifacts"
-          echo "  Download: NexusPOS-${{ github.run_number }}"
+          echo "  Download: KiranaPOS-${{ github.run_number }} (APK) or -play-bundle (AAB for Google Play)"
           echo "  Transfer to phone → install → allow 'Install unknown apps'"
           echo "========================================"

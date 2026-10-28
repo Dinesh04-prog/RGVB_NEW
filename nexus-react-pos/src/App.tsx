@@ -774,7 +774,8 @@ export default function App() {
       // so then the owner is told where to find the bill instead of getting a dead link.
       const appUrl = (import.meta.env.VITE_APP_URL || 'http://localhost:5173').replace(/\/$/, '');
       const linkWorks = /^https?:\/\//.test(appUrl) && !appUrl.includes('appassets.androidplatform.net');
-      const ownerPhone = brand.whatsapp || import.meta.env.VITE_OWNER_PHONE || '';
+      // The shop's own WhatsApp (Shop settings); none set → WhatsApp lets the cashier pick the contact
+      const ownerPhone = brand.whatsapp;
       const total = cart.reduce((s, i) => s + i.total, 0);
       const how = linkWorks
         ? `Please review & update rates:\n${appUrl}/?review=${id}`

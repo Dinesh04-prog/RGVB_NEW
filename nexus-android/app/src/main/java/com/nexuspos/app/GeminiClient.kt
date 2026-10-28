@@ -43,6 +43,9 @@ object GeminiClient {
 
     fun configured() = BuildConfig.GEMINI_WORKER_URL.isNotBlank() && BuildConfig.GEMINI_APP_KEY.isNotBlank()
 
+    /** The signed-in person's Firebase ID token, handed over by the web app (AndroidApp.setSignInToken); "" = none. */
+    @Volatile var signInToken: String = ""
+
     fun usedByUser(ctx: Context) = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_USE, true)
 
     fun setUsedByUser(ctx: Context, on: Boolean) =
@@ -103,6 +106,8 @@ object GeminiClient {
                 setRequestProperty("Content-Type", "application/json")
                 setRequestProperty("X-App-Key", BuildConfig.GEMINI_APP_KEY)
                 setRequestProperty("X-Device-Id", deviceId(ctx))
+                // Lets the Worker count scans per person (and refuse copies of the app key without a sign-in)
+                signInToken.takeIf { it.isNotBlank() }?.let { setRequestProperty("Authorization", "Bearer $it") }
             }
             conn.outputStream.use { it.write(body) }
             val code = conn.responseCode
@@ -137,6 +142,8 @@ object GeminiClient {
 
     private fun statusOf(code: Int, err: String) = when {
         err in setOf("disabled", "daily_cap", "quota", "rate_limited", "timeout", "unauthorized") -> err
+        err == "user_daily_cap" -> "daily_cap"
+        err == "sign_in_required" || err == "bad_sign_in" -> "unauthorized"
         code == 401 -> "unauthorized"
         code == 429 -> "quota"
         else -> "error"

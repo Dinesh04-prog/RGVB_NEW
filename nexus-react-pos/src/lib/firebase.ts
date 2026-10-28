@@ -1,7 +1,7 @@
 import { initializeApp, getApps } from 'firebase/app';
 import {
   initializeAuth, getAuth, indexedDBLocalPersistence, browserLocalPersistence, connectAuthEmulator,
-  GoogleAuthProvider, signInWithCredential, signOut, onAuthStateChanged, deleteUser, type User,
+  GoogleAuthProvider, signInWithCredential, signOut, onAuthStateChanged, onIdTokenChanged, deleteUser, type User,
 } from 'firebase/auth';
 import {
   initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager, connectFirestoreEmulator, CACHE_SIZE_UNLIMITED,
@@ -135,6 +135,17 @@ export const writeOrQueue = (write: Promise<unknown>, ms = 4000): Promise<boolea
 };
 
 // ── Sign-in ──────────────────────────────────────────────────────────────────
+
+// Inside the Android app: the native photo scan sends this token to the Gemini Worker, which counts scans per person.
+// Firebase refreshes the token about every hour; each new one is handed over again ('' after sign-out).
+if (auth && typeof window !== 'undefined') {
+  const androidApp = (window as unknown as { AndroidApp?: { setSignInToken?: (t: string) => void } }).AndroidApp;
+  if (androidApp?.setSignInToken) {
+    onIdTokenChanged(auth, async u => {
+      try { androidApp.setSignInToken!(u ? await u.getIdToken() : ''); } catch { /* older app */ }
+    });
+  }
+}
 
 const toAppUser = (u: User): AppUser => ({
   uid: u.uid, name: u.displayName || u.email || 'User', email: u.email || '', picture: u.photoURL || '',

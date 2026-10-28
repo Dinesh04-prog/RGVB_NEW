@@ -27,6 +27,12 @@ class AndroidAppBridge(private val activity: MainActivity) {
         val ALLOWED_SCHEMES = setOf("https", "http", "whatsapp", "tel", "mailto")
     }
 
+    /** The web app's Firebase sign-in token (sent again whenever Firebase refreshes it, about hourly). */
+    @JavascriptInterface
+    fun setSignInToken(token: String) {
+        GeminiClient.signInToken = if (token.length in 1..4096) token else ""
+    }
+
     /** True when the link was handed to another app. */
     @JavascriptInterface
     fun openExternal(url: String): Boolean {

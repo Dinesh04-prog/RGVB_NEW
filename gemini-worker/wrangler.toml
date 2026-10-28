@@ -12,11 +12,16 @@ GEMINI_MODEL = "gemini-3.5-flash-lite"
 DAILY_CAP = "150"
 # Kill switch: "true" = on. Anything else turns Gemini off for every phone at once (the app reads on the phone only).
 ENABLED = "true"
+# Firebase project whose sign-in tokens the app sends (Authorization: Bearer). Each signed-in person gets
+# USER_DAILY_CAP scans per day. Set REQUIRE_SIGN_IN = "true" once every phone runs the new app (older apps send no token).
+FIREBASE_PROJECT_ID = "nexus-pos-817c3"
+USER_DAILY_CAP = "20"
+REQUIRE_SIGN_IN = "false"
 
 # Daily scan counter. Replace the id with the one printed by: npx wrangler kv namespace create USAGE
 [[kv_namespaces]]
 binding = "USAGE"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
+id = "b462867732f243a9bb5247fbfb6ab9ce"
 
 # 6 scans per minute per phone (counted per Cloudflare location, approximate)
 [[ratelimits]]

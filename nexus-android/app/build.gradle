@@ -1,18 +1,28 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     id 'com.android.application'
     id 'org.jetbrains.kotlin.android'
 }
 
+// Release signing (Google Play). From the environment / GitHub secrets: KEYSTORE_FILE (path to the .jks),
+// KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD. Without them the release build is signed with the debug key
+// (installable for testing, not accepted by Play).
+def envOr = { String k -> (System.getenv(k) ?: '').trim() }
+def releaseKeystore = envOr('KEYSTORE_FILE')
+def hasReleaseKey = releaseKeystore && file(releaseKeystore).exists()
+
 android {
     namespace 'com.nexuspos.app'
-    compileSdk 34
+    compileSdk 36
 
     defaultConfig {
         applicationId "com.nexuspos.app"
         minSdk 26
-        targetSdk 34
-        versionCode 1
-        versionName "1.0"
+        targetSdk 36
+        // Every CI build gets a higher number (Play refuses an upload whose versionCode is not higher)
+        versionCode (envOr('VERSION_CODE') ? envOr('VERSION_CODE').toInteger() : 1)
+        versionName "2.0.${envOr('VERSION_CODE') ?: '0'}"
 
         // Bundled ML Kit models ship native code per CPU type; real phones are ARM.
         // Dropping x86/x86_64 keeps the APK ~8 MB smaller (emulators need an ARM image).
@@ -31,12 +41,21 @@ android {
         buildConfig true
     }
 
+    signingConfigs {
+        release {
+            if (hasReleaseKey) {
+                storeFile file(releaseKeystore)
+                storePassword envOr('KEYSTORE_PASSWORD')
+                keyAlias envOr('KEY_ALIAS')
+                keyPassword envOr('KEY_PASSWORD')
+            }
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
-            // Sign release with debug key so the APK can be sideloaded directly.
-            // To publish to Play Store, replace with a real signing config.
-            signingConfig signingConfigs.debug
+            signingConfig hasReleaseKey ? signingConfigs.release : signingConfigs.debug
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
@@ -46,9 +65,6 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = '17'
-    }
 
     testOptions {
         unitTests.all {
@@ -69,7 +85,6 @@ dependencies {
     implementation 'androidx.webkit:webkit:1.10.0'
 
     // Add item from photos — camera + on-device ML Kit (bundled models, no network, no API key).
-    // CameraX 1.5+ needs compileSdk 35, so stay on 1.4.x with compileSdk 34.
     def camerax = '1.4.2'
     implementation "androidx.camera:camera-core:$camerax"
     implementation "androidx.camera:camera-camera2:$camerax"
@@ -80,4 +95,10 @@ dependencies {
     implementation 'com.google.mlkit:text-recognition-devanagari:16.0.1'
 
     testImplementation 'junit:junit:4.13.2'
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = JvmTarget.JVM_17
+    }
 }

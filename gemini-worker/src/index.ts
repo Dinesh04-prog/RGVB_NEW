@@ -9,6 +9,7 @@
 import {
   MAX_BODY_BYTES, RESPONSE_SCHEMA, SYSTEM_PROMPT, answerText, parseImagesBody, quotaDay, safeEqual, validateRead,
 } from './validate';
+import { verifyFirebaseToken, fetchGoogleKeys, type KeyFetcher } from './auth';
 
 export interface Env {
   GEMINI_API_KEY: string;        // secret
@@ -18,8 +19,15 @@ export interface Env {
   DAILY_CAP: string;             // var, scans per Pacific day for all devices together
   ENABLED: string;               // var, "true" to serve; anything else = off (kill switch)
   USAGE: KVNamespace;            // daily counter
-  DEVICE_LIMITER: RateLimit;     // 6 requests / 60 s per device
+  DEVICE_LIMITER: RateLimit;     // 6 requests / 60 s per device (per signed-in person when signed in)
+  FIREBASE_PROJECT_ID?: string;  // var: Firebase project whose sign-in tokens are accepted
+  REQUIRE_SIGN_IN?: string;      // var: "true" = refuse scans without a valid Firebase sign-in token
+  USER_DAILY_CAP?: string;       // var: scans per signed-in person per Pacific day
 }
+
+// Replaceable in tests (Google's real public keys otherwise)
+let getGoogleKeys: KeyFetcher = fetchGoogleKeys;
+export const setKeyFetcherForTests = (f: KeyFetcher) => { getGoogleKeys = f; };
 
 const GEMINI_TIMEOUT_MS = 20_000;
 
@@ -41,7 +49,19 @@ export default {
     if (!(safeEqual(key, env.APP_KEY || '') || safeEqual(key, env.APP_KEY_PREVIOUS || ''))) return fail(401, 'unauthorized');
     const device = request.headers.get('x-device-id') || '';
     if (!/^[A-Za-z0-9-]{8,64}$/.test(device)) return fail(400, 'bad_device');
-    const { success } = await env.DEVICE_LIMITER.limit({ key: device });
+
+    // Signed-in person (Firebase ID token): counted and limited per person, not per shared key
+    const authz = request.headers.get('authorization') || '';
+    let uid = '';
+    if (authz.startsWith('Bearer ')) {
+      const check = await verifyFirebaseToken(authz.slice(7).trim(), env.FIREBASE_PROJECT_ID || '', Date.now(), getGoogleKeys);
+      if (!check.ok) return fail(401, 'bad_sign_in');
+      uid = check.uid;
+    } else if (env.REQUIRE_SIGN_IN === 'true') {
+      return fail(401, 'sign_in_required');
+    }
+
+    const { success } = await env.DEVICE_LIMITER.limit({ key: uid ? `user:${uid}` : device });
     if (!success) return fail(429, 'rate_limited');
 
     const declared = Number(request.headers.get('content-length') || '0');
@@ -55,6 +75,13 @@ export default {
     const dayKey = `scans:${quotaDay(new Date())}`;
     const used = Number((await env.USAGE.get(dayKey)) || '0');
     if (used >= cap) return fail(429, 'daily_cap');
+    // Each signed-in person's share of the day, so one heavy user cannot use up everyone's free quota
+    if (uid) {
+      const userKey = `user:${uid}:${quotaDay(new Date())}`;
+      const userUsed = Number((await env.USAGE.get(userKey)) || '0');
+      if (userUsed >= Number(env.USER_DAILY_CAP || '20')) return fail(429, 'user_daily_cap');
+      await env.USAGE.put(userKey, String(userUsed + 1), { expirationTtl: 3 * 24 * 3600 });
+    }
     await env.USAGE.put(dayKey, String(used + 1), { expirationTtl: 3 * 24 * 3600 });
 
     const model = env.GEMINI_MODEL || 'gemini-3.5-flash-lite';

@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Privacy Policy · Kirana POS</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<header><div class="in"><img src="icon.png" alt="" /><a href="index.html">Kirana POS</a></div></header>
+<main>
+  <h1>Privacy Policy</h1>
+  <p class="muted">Last updated: 28 October 2026</p>
+
+  <div class="card">
+    <p>Kirana POS is a billing and stock app for small shops. This page explains what the app stores, why, who can see it,
+      and how to delete it. We do not show ads and we do not sell any data.</p>
+  </div>
+
+  <div class="card">
+    <h2>What the app stores</h2>
+    <ul>
+      <li><b>Your Google account:</b> name, email address and profile photo, used to sign you in and to show who made a bill.</li>
+      <li><b>Shop details</b> entered by the shop owner: shop name, address, phone, WhatsApp number, UPI ID, bill settings and logo.</li>
+      <li><b>Items:</b> names, prices, stock, barcodes and small item pictures.</li>
+      <li><b>Bills:</b> items, amounts, date, and the customer's name and mobile number when the shop enters them.</li>
+      <li><b>Udhaar (credit) records:</b> the customer's name, mobile number, and the amounts owed and paid.</li>
+      <li><b>Bill approvals</b> sent between a cashier and the owner, and the list of people in each shop.</li>
+    </ul>
+    <p>All of this belongs to the shop. Only people the shop owner has added to the shop can see it.</p>
+  </div>
+
+  <div class="card">
+    <h2>Where it is kept</h2>
+    <ul>
+      <li>On the phone, so billing works without internet.</li>
+      <li>In <b>Google Firebase</b> (Firebase Authentication and Cloud Firestore), so the shop's phones stay in sync and bills can
+        be restored on a new phone. Security rules let each shop's members reach only their own shop's data.</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>Photos sent for reading ("Fill from photos")</h2>
+    <p>When someone fills in a new item from photos of its pack, the photos are first read on the phone. If the online reader is
+      turned on, the photos are also sent through our server (Cloudflare Workers) to <b>Google Gemini</b> to read the product
+      name, MRP and pack size. Only pack photos are sent, never bills or customer data. Google may process these photos under the
+      <a href="https://ai.google.dev/gemini-api/terms">Gemini API terms</a>. Our server does not keep the photos.</p>
+  </div>
+
+  <div class="card">
+    <h2>Phone permissions</h2>
+    <ul>
+      <li><b>Camera:</b> to scan barcodes and take item photos. Asked only when you scan.</li>
+      <li><b>Microphone:</b> for voice search of items. Asked only when you use it.</li>
+      <li><b>Nearby devices (Bluetooth):</b> to print bills on a paired Bluetooth printer. Asked only when you choose a printer.</li>
+    </ul>
+    <p>The app does not use your location.</p>
+  </div>
+
+  <div class="card">
+    <h2>Sharing</h2>
+    <p>We do not sell data or share it with advertisers. Data is processed only by the services named above (Google Firebase,
+      Google Gemini, Cloudflare) to run the app. When the shop sends a bill or a reminder on WhatsApp, it goes through the
+      shop's own WhatsApp.</p>
+  </div>
+
+  <div class="card">
+    <h2>Keeping and deleting data</h2>
+    <p>Data is kept until the shop deletes it. You can delete it yourself in the app:</p>
+    <ul>
+      <li><b>Shop owner:</b> ☰ → Shop &amp; Cashiers → Delete shop. This deletes the shop, all its items, bills, udhaar records and
+        cashiers, and the owner's account.</li>
+      <li><b>Cashier:</b> ☰ → Delete my account. Bills the cashier made stay with the shop.</li>
+    </ul>
+    <p>Or ask us to delete it: see <a href="delete-account.html">Delete your account and data</a>.</p>
+  </div>
+
+  <div class="card">
+    <h2>Children</h2>
+    <p>The app is for shop owners and their staff. It is not meant for children under 13.</p>
+  </div>
+
+  <div class="card">
+    <h2>Contact</h2>
+    <p>Questions about privacy: <span class="todo">[your contact email]</span></p>
+  </div>
+</main>
+<footer>Kirana POS · <a href="delete-account.html">Delete account</a></footer>
+</body>
+</html>
